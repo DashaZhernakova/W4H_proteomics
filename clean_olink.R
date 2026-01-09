@@ -81,9 +81,80 @@ merged_wide2 <- cbind(ID, TP, merged_wide2)
 write.table(merged_wide2, file = "olink_clean_CVD+INF.txt", quote = F, sep = "\t", row.names = FALSE)
 write.table(merged_long2, file = "olink_clean_CVD+INF_long.txt", quote = F, sep = "\t", row.names = FALSE)
 
+
 ################################################################################
-# 5. Set extreme outliers > 4 SDs from the mean to NA
+# 5. Remove below LOD values
 ################################################################################
+merged_data <- read.delim("olink_clean_CVD+INF.txt", check.names =  F, sep = "\t", as.is = T, colClasses = c(ID = "character"))
+
+lod_values <- read.delim("Explore 3072_Fixed LOD_2024-12-19.csv", sep = ";",check.names =  F, as.is = T)
+lod_values <- lod_values[lod_values$DataAnalysisRefID %in% c("E70006", "E50007"),]
+lod_values[lod_values$Assay == "TNF" & lod_values$Panel == "Cardiometabolic", "Assay"] <- "TNF_CVD"
+lod_values[lod_values$Assay == "IL6" & lod_values$Panel == "Cardiometabolic", "Assay"] <- "IL6_CVD"
+lod_values[lod_values$Assay == "CXCL8" & lod_values$Panel == "Cardiometabolic", "Assay"] <- "CXCL8_CVD"
+
+lod_map <- setNames(lod_values$LODNPX, lod_values$Assay)
+
+all_prots <- colnames(merged_data)[4:ncol(merged_data)]
+
+# Apply the function to each protein column
+cleaned_data_rm_below_lod <- merged_data
+num_below_lod <- data.frame(protein = all_prots, num_samples = 0, num_below_lod = 0)
+row.names(num_below_lod) <- all_prots
+
+for (protein in all_prots) {
+  lod_value <- lod_map[protein]
+  column <- cleaned_data_rm_below_lod[[protein]]
+  num_below_lod[protein, "num_samples"] <- sum(!is.na(column))
+  num_below_lod[protein, "num_below_lod"] <- length(column[!is.na(column) & column < lod_value])
+  num_below_lod[protein, "num_valid_samples"] <- num_below_lod[protein, "num_samples"] - num_below_lod[protein, "num_below_lod"]
+  num_below_lod[protein, "num_valid_indiv"] <- length(unique(cleaned_data_rm_below_lod[!is.na(column) & column > lod_value,"ID"]))
+  column[column < lod_value] <- NA  
+  cleaned_data_rm_below_lod[[protein]] <- column
+}
+num_below_lod$perc_below_lod <- num_below_lod$num_below_lod / num_below_lod$num_samples
+num_below_lod = left_join(num_below_lod, lod_values[,c("Assay", "LODNPX")], by = c("protein" = "Assay"))
+
+pdf("num_below_lod.pdf",height = 7, width = 20)
+ggplot(num_below_lod, aes(x = fct_reorder(protein, -num_below_lod), y = num_below_lod)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  geom_hline(yintercept = 263, color = 'grey') + 
+  theme(axis.text.x = element_text(hjust = 1, size = 4, angle = 45),
+        plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5)) +
+  xlab("protein")
+dev.off()
+
+write.table(cleaned_data_rm_below_lod, file = "olink_clean_CVD+INF_rm_below_lod_keep_NA.txt", quote = F, sep = "\t", row.names = FALSE)
+write.table(num_below_lod, file = "num_below_lod.txt", quote = F, sep = "\t", row.names = FALSE)
+
+
+# remove proteins that have more than half of the samples below LOD
+prots_half_below_lod <- num_below_lod[num_below_lod$perc_below_lod > 0.5,"protein"]
+length(prots_half_below_lod)
+prots_less_30_indiv <- num_below_lod[num_below_lod$num_valid_indiv < 30, "protein"]
+prots_less_100_samples <- num_below_lod[num_below_lod$num_valid_samples < 100, "protein"]
+
+cleaned_data_rm_below_lod_flt <- cleaned_data_rm_below_lod
+
+#cleaned_data_rm_below_lod_flt[,prots_half_below_lod] <- NULL
+#write.table(cleaned_data_rm_below_lod_flt, file = "olink_clean_CVD+INF_rm_below_lod_prot_with_more_half_samples.txt", quote = F, sep = "\t", row.names = FALSE)
+
+#cleaned_data_rm_below_lod_flt[,prots_less_30_indiv] <- NULL
+#write.table(cleaned_data_rm_below_lod_flt, file = "olink_clean_CVD+INF_rm_below_lod_more_30_indiv.txt", quote = F, sep = "\t", row.names = FALSE)
+
+cleaned_data_rm_below_lod_flt[,prots_less_100_samples] <- NULL
+write.table(cleaned_data_rm_below_lod_flt, file = "olink_clean_CVD+INF_rm_below_lod_more_100_samples.txt", quote = F, sep = "\t", row.names = FALSE)
+
+
+################################################################################
+# 6. Set extreme outliers > 4 SDs from the mean to NA
+################################################################################
+
+remove_outliers("olink_clean_CVD+INF_rm_below_lod_more_100_samples.txt")
+remove_outliers("olink_clean_CVD+INF_rm_below_lod_more_30_indiv.txt")
+remove_outliers("olink_clean_CVD+INF_rm_below_lod_prot_with_more_half_samples.txt")
+
 
 remove_outliers_per_feature <- function(d, sd_cutoff = 4, iqr_cutoff = 3, method = 'zscore') {
   if (method == 'zscore'){
@@ -114,19 +185,7 @@ remove_outliers_dataframe <- function(df, sd_cutoff = 5) {
   list(cleaned_data = df_cleaned, outlier_mask = outlier_summary)
 }
 
-res <- remove_outliers_dataframe(merged_wide2,  sd_cutoff = 5)
-
-cleaned_data <- res$cleaned_data
-outliers <- res$outlier_mask[res$outlier_mask$has_outliers == T, ]$column
-length(outliers)
-
-write.table(cleaned_data, file = "olink_clean_CVD+INF_rm_outliers_5sd.txt", quote = F, sep = "\t", row.names = FALSE)
-
-
-plots <- plot_features_with_outliers(merged_wide2, outliers, cutoff = 5)
-
-
-plot_features_with_outliers <- function(df, features_with_outliers, cutoff = 5, output_dir = NULL, method = 'zscore') {
+plot_features_with_outliers <- function(df, features_with_outliers, cutoff = 4, output_dir = NULL, method = 'zscore') {
   
   # Iterate over each feature and create a plot
   plots <- list()
@@ -165,4 +224,19 @@ plot_features_with_outliers <- function(df, features_with_outliers, cutoff = 5, 
   }
   
   return(plots)
+}
+
+remove_outliers <- function(fname,  sd_cutoff = 4, make_plots = F) {
+  cleaned_data_rm_below_lod <- read.delim(fname, check.names =  F, sep = "\t", as.is = T, colClasses = c(ID = "character"))
+  
+  res <- remove_outliers_dataframe(cleaned_data_rm_below_lod,  sd_cutoff)
+  cleaned_data <- res$cleaned_data
+  outliers <- res$outlier_mask[res$outlier_mask$has_outliers == T, ]$column
+  length(outliers)
+  write.table(cleaned_data, file = paste0(gsub(".txt$","",fname), "_rm_outliers_", sd_cutoff, "sd.txt"), quote = F, sep = "\t", row.names = FALSE)
+
+  if (make_plots) {
+    plots <- plot_features_with_outliers(cleaned_data_rm_below_lod, outliers, cutoff = 4)
+    return(plots)
+  }
 }

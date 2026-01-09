@@ -1,19 +1,64 @@
 # Mediation analysis
 library(mediation)
-all_combined <- full_join(d_wide, pheno, by = c("ID", "TP"))
+all_combined <- full_join(d_wide, pheno, by = c("SampleID","ID", "phase"))
 all_combined$SampleID.x <- NULL
 all_combined$SampleID.y <- NULL
 
-all_combined_1 <- all_combined[all_combined$TP == '1',]
+all_combined_1 <- all_combined[all_combined$phase == 'F',]
 
-exposure = 'PROK1'
-mediator = 'PROG'
-outcome = 'FSH'
+phase = 'F'
+exposure = 'PROG'
+mediator = 'TFPI'
+outcome = 'LDL'
+res <- run_simple_mediation(all_combined[all_combined$phase == phase,], exposure, mediator, outcome)
+summary(res)
 
-tp = 3
+res <- run_simple_mediation(all_combined[all_combined$phase == "EL",], "PROG", "TFPI", "LDL")
+summary(res)
+
+trios <- data.frame(matrix(c("HDL", "FAP", "COL",
+                    "LDL", "MEGF9", "COL",
+                    "COL", "LDLR", "LDL",
+                    "COL", "GAS6", "LDL",
+                    "COL", "TFPI", "LDL",
+                    "ALT", "GSTA1", "COL",
+                    "COL", "GAS6", "AST",
+                    "COL", "ADH4", "ALT",
+                    "TRI", "AGRP", "COL",
+                    "TRI", "LDLR", "LDL",
+                    "PROG", "EPHA1", "AST",
+                    "LH", "SPON2", "LDL",
+                    "PROG", "TFPI", "LDL",
+                    "PROG", "CHRDL2", "LDL",
+                    "17BES", "CHRDL2", "LDL",
+                    "HOMA_IR", "IGFBP1", "PROG",
+                    "CRLF1", "PROG", "CLSTN2",
+                    "HYAL1", "HOMA_IR", "IGFBP1"
+                    ), byrow = T, ncol = 3))
+colnames(trios) <- c("exposure", "mediator", "outcome")
+
+res_med <- data.frame(matrix(nrow = nrow(trios) * length(all_phases), ncol = 7))
+colnames(res_med) <- c("exposure", "mediator", "outcome", "phase", "ACME_p", "ADE_p", "prop_mediated")
+cnt <- 1
+for (i in 1:nrow(trios)){
+  exposure <- trios[i,"exposure"]
+  mediator <- trios[i, "mediator"]
+  outcome <- trios[i, "outcome"]
+  for (phase in all_phases){
+    res <- summary(run_simple_mediation(all_combined[all_combined$phase == phase,], exposure, mediator, outcome))
+    acme_p <- res$d0.p 
+    ade_p <- res$z0.p 
+    prop_med <- res$n0
+    res_med[cnt,] <- c(trios[i,], phase, acme_p, ade_p, prop_med)
+    cnt <- cnt + 1
+  }
+}
+
+res_med2 <- res_med %>%
+  mutate(across(c(ACME_p, ADE_p, prop_mediated), as.numeric))
 
 run_simple_mediation <- function(all_combined_1, exposure, mediator, outcome){
-  subs <- all_combined_1[,c(exposure, mediator, outcome)]
+  subs <- na.omit(all_combined_1[,c(exposure, mediator, outcome)])
   colnames(subs) <- c("exp", "med", "out")
   model.0 <- lm(out ~ exp, subs)
   #summary(model.0)

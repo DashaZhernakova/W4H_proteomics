@@ -1,6 +1,6 @@
 my_colors <- c("#eddb6d", "#ed9f47", "#4b9aaf", "#3a6887")
 setwd("/Users/Dasha/work/Sardinia/W4H/olink/")
-source("scripts/utility_functions.R")
+source("/Users/Dasha/work/Sardinia/W4H/olink/scripts/utility_functions.R")
 
 library(ggplot2)
 library(rmcorr)
@@ -12,8 +12,8 @@ library(pheatmap)
 library(corrplot)
 library(patchwork)
 
-out_basedir <- "results/pheno_batch2_prot_rm_outliers_4sd/"
-d_wide <- read.delim("data/olink_clean_CVD+INF_rm_outliers_4sd.txt", as.is = T, check.names = F, sep = "\t", colClasses = c(ID = "character"))
+out_basedir <- "results/pheno_batch2_prot_rm_below_lod_rm_outliers_4sd/"
+d_wide <- read.delim("data/olink_clean_CVD+INF_rm_below_lod_more_100_samples_rm_outliers_4sd.txt", as.is = T, check.names = F, sep = "\t", colClasses = c(ID = "character"))
 covariates <- read.delim("data/covariates_age_bmi_storage_preg.txt", sep = "\t", check.names = F, as.is = T, colClasses = c(ID = "character"))
 
 d_wide$TP <- as.numeric(d_wide$TP)

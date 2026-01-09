@@ -5,30 +5,12 @@ library(ReactomePA)
 
 hs <- org.Hs.eg.db
 hs_msigdb_df <- msigdbr(species = "Homo sapiens")
-prot_names <- read.delim("data/olink_protein_names.txt", sep = "\t", as.is = T, check.names = F)
-
-#lmm_res_prot_tp <- read.delim("../results/prot_vs_tp_poly3_lmm_adj_age_bmi_preg_storage.txt", sep = "\t", as.is = T, check.names = F)
+prot_names <- read.delim("data/batch12_protein_names.txt", sep = "\t", as.is = T, check.names = F)
 
 
-#sign_pheno <- unique(lmm_res[lmm_res$BH_pval < 0.05, "pheno"])
+input_data <- read.delim(paste0(out_basedir, "prot_vs_hormones_spline.batch12_batch2.txt"), sep = "\t", as.is = T, check.names = F)
+fold_change <- "abs_estimate"
 
-
-
-#input_data <- as.data.frame(pheno_dist)
-#input_data$eucl_coef_similarity <- 1 / (1 + input_data$eucl_coef)
-#input_data$eucl_similarity <- 1 / (1 + input_data$eucl)
-#fold_change <- 'eucl_similarity'
-#fold_change <- 'eucl_coef_similarity'
-
-input_data <- gam_res_lin 
-fold_change <- "est_noTP"
-
-#input_data <- gam_res_diet_w 
-#fold_change <- "lmm_est"
-
-
-#input_data <- lmm_res
-#fold_change <- 'tval'
 enrichment_res <- data.frame()
 plot_list <- list()
 for (ph in unique(input_data$pheno)){
@@ -47,30 +29,37 @@ for (ph in unique(input_data$pheno)){
   } else {
     gse_res <- cbind(data.frame("ONTOLOGY" = "BP"), as_tibble(enrich_res[['gse']]@result))
   }
+    plot_list[[ph]] <- dotplot(enrich_res[['gse']], showCategory=10, split=".sign") + facet_grid(.~.sign) + ggtitle(ph) + theme(axis.text.y=element_text(size=8))
   } 
-  if (nrow(enrich_res[['kegg']]@result) > 0) kegg_res <- cbind(data.frame("ONTOLOGY" = "KEGG"), as_tibble(enrich_res[['kegg']]@result))
+  if (nrow(enrich_res[['kegg']]@result) > 0) {
+    kegg_res <- cbind(data.frame("ONTOLOGY" = "KEGG"), as_tibble(enrich_res[['kegg']]@result))
+    plot_list[[paste0(ph, "_kegg")]] <- dotplot(enrich_res[['kegg']], showCategory=10, split=".sign") + facet_grid(.~.sign) + ggtitle(paste(ph, " KEGG"))
+  }
   
-  if (nrow(enrich_res[['reactome']]@result) > 0) rea_res <- cbind(data.frame("ONTOLOGY" = "Reactome"), as_tibble(enrich_res[['reactome']]@result))
+  if (nrow(enrich_res[['reactome']]@result) > 0) {
+    rea_res <- cbind(data.frame("ONTOLOGY" = "Reactome"), as_tibble(enrich_res[['reactome']]@result))
+    plot_list[[paste0(ph, "_reactome")]] <- dotplot(enrich_res[['reactome']], showCategory=10, split=".sign") + facet_grid(.~.sign) + ggtitle(paste(ph, " Reactome"))
+  }
   
   tryCatch({
     combined_res <- rbind(gse_res, kegg_res, rea_res)
     enrichment_res <- rbind(enrichment_res, cbind(data.frame("Phenotype" = ph), combined_res))
     
     
-    plot_list[[ph]] <- dotplot(enrich_res[['gse']], showCategory=10, split=".sign") + facet_grid(.~.sign) + ggtitle(ph) + theme(axis.text.y=element_text(size=8))
-    plot_list[[paste0(ph, "_kegg")]] <- dotplot(enrich_res[['kegg']], showCategory=10, split=".sign") + facet_grid(.~.sign) + ggtitle(paste(ph, " KEGG"))
-    plot_list[[paste0(ph, "_reactome")]] <- dotplot(enrich_res[['reactome']], showCategory=10, split=".sign") + facet_grid(.~.sign) + ggtitle(paste(ph, " Reactome"))
+    
+    
+    
   }, error = function(e) {
     message("No results: ", conditionMessage(e))
   })
 }
 
-pdf(paste0(out_basedir,"/plots/enrichment_prot_vs_pheno_linear_noTP_gam.pdf"), height = 15, width = 15)
-grid.arrange(grobs = plot_list, ncol = 3, nrow = 3)  
+pdf(paste0(out_basedir,"/plots/prot_vs_hormones.combined_b12_b2.spline.abs_beta.enrichment_results.pdf"), height = 15, width = 15)
+grid.arrange(grobs = plot_list, ncol = 4, nrow = 3)  
 dev.off()
 
 #write.table(enrichment_res, file = "../results/prot_vs_pheno_withTP_lmm_adj_covar_enrichment_results.txt", quote = F, sep = "\t", row.names = FALSE)
-write.table(enrichment_res, file = paste0(out_basedir,"prot_vs_pheno_linear_no_TP_gam_GO_KEGG_enrichment_results.txt"), quote = F, sep = "\t", row.names = FALSE)
+write.table(enrichment_res, file = paste0(out_basedir,"prot_vs_hormones.combined_b12_b2.spline.abs_beta.enrichment_results.txt"), quote = F, sep = "\t", row.names = FALSE)
 
 
 # msigdb
@@ -92,7 +81,7 @@ for (ph in unique(input_data$pheno)){
   }
 }
 
-write.table(enrichment_res, file = paste0(out_basedir,"prot_vs_pheno_linear_noTP_gam_msigdb_enrichment_results.txt"), quote = F, sep = "\t", row.names = FALSE)
+write.table(enrichment_res, file = paste0(out_basedir,"prot_vs_pheno_linear_spline_gam_msigdb_enrichment_results.txt"), quote = F, sep = "\t", row.names = FALSE)
 
 
 #### Custom: Iceland prot - pheno associations
@@ -155,6 +144,7 @@ add_entrez_gene_names <- function(d, col_name) {
 run_enrichment_analysis <- function(subs){
   
   df_for_enrich <- add_entrez_uniprot_ids(subs)
+  df_for_enrich <- df_for_enrich[! is.na(df_for_enrich$entrez),]
   # GO
   gene_list <- df_for_enrich[,2]
   names(gene_list) = as.character(df_for_enrich$entrez)
@@ -268,6 +258,18 @@ for (cl in unique(tmp$trajectory_cluster)){
   if (nrow(res) > 0) print(cl)
 }
 
+
+signif_genes <- add_entrez_uniprot_ids(
+  read.delim(paste0(out_basedir, "tmp_signif.txt"), as.is = T, sep = "\t")
+)$entrez
+
+background_genes <- add_entrez_uniprot_ids(
+  read.delim(paste0(out_basedir, "tmp_background.txt"), as.is = T, sep = "\t")
+)$entrez
+run_overrepresentation_analysis(signif_genes, background_genes)
+
+
+
 genename_to_entrez <- function(gene_names){
   entrez_ids <- select(hs, 
                        keys = gene_names,
@@ -319,8 +321,8 @@ run_overrepresentation_analysis <- function(signif_genes, background_genes, pval
   result_df_kegg <- data.frame(enrich_res_kegg@result)
   result_df_reactome <- data.frame(enrich_res_reactome@result)
   
-  result_df_kegg <- result_df_kegg[result_df_kegg$pvalue < 0.05,]
-  result_df_reactome <- result_df_reactome[result_df_reactome$pvalue < 0.05,]
+  result_df_kegg <- result_df_kegg[result_df_kegg$pvalue < 0.1,]
+  result_df_reactome <- result_df_reactome[result_df_reactome$pvalue < 0.1,]
   
   combined_res <- rbind(result_df_reactome, result_df_kegg)
   return(combined_res)
@@ -357,3 +359,4 @@ run_overrepresentation_analysis_msigdb <- function(subs, cat){
   return(enrich_res)
   
 }
+
