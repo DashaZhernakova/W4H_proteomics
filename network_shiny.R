@@ -4,7 +4,6 @@ library(dplyr)
 library(readr)
 library(bslib)
 
-# --- DATA LOADING ---
 setwd("/Users/Dasha/work/Sardinia/W4H/olink/batch12/results12/intensity_shared_prots_261125/network")
 edges_data <- read.delim("network.spline.edges.causality2.with_pheno-pheno.txt", sep = "\t", check.names = F, as.is = T)  
 nodes_data <- read.delim("network.spline.nodes.txt", sep = "\t", check.names = F, as.is = T) 
@@ -20,9 +19,6 @@ edges_vis <- edges_data %>%
     from = prot,
     to = pheno,
     strong_assoc = if_else(abs(estimate) > 0.15, TRUE, FALSE),
-    title = paste0(prot, " → ", pheno, 
-                   "<br>Estimate: ", round(estimate, 3),
-                   "<br>Directed: ", has_direction),
     color = case_when(
       estimate > 0 ~ "#FF0000",
       estimate < 0 ~ "#3498DB",
@@ -30,6 +26,7 @@ edges_vis <- edges_data %>%
     arrows = ifelse(has_direction, "to", ""),
     width = 1 ,
     smooth = F,
+    title = paste0(prot, " → ", pheno, "<br>Est: ", round(estimate, 3)),
   )
 
 # Process nodes data
@@ -38,7 +35,6 @@ nodes_vis <- nodes_data %>%
   mutate(
     id = feature,
     label = feature,  
-    title = paste0("Type: ", type, "<br>ID: ", feature),
     color = case_when(
       type == "protein" ~ "#97C2FC",
       type == "phenotype" ~ "#FFB6C1",
@@ -48,7 +44,8 @@ nodes_vis <- nodes_data %>%
     shape = 'circle',
     size = 25,
     borderWidth = 2,
-    borderWidthSelected = 4
+    borderWidthSelected = 4,
+    title = paste0("Type: ", type, "<br>ID: ", feature)
   )
 
 edges_with_types <- edges_vis %>%
@@ -94,16 +91,18 @@ disease_nodes_all <- data.frame(
   node_with_two_edges = NA
 )
 
+# -------------------------------------------------- 
+
 ui <- page_sidebar(
   sidebar = sidebar(
     selectizeInput("multi_node_select", 
-                   "Select Nodes (Multiple):", 
+                   "Select one or mulitple nodes:", 
                    choices = NULL, 
                    multiple = TRUE,
                    options = list(placeholder = 'Type or select nodes...')),
     hr(),
     checkboxGroupInput("edge_filters", 
-                       "Show Edge Types:",
+                       "Show edge types:",
                        choices = c("hormone - hormone",
                                    "phenotype - phenotype",
                                    "hormone - phenotype", 
@@ -116,18 +115,75 @@ ui <- page_sidebar(
                                     "phenotype - protein")),
     hr(),
     checkboxInput("show_diseases", "Show associated diseases (based on MR)", value = FALSE),
-    hr(),
     checkboxInput("filter_strong", "Show only associations with |estimate| > 0.15", value = FALSE),
-    hr(),
     checkboxInput("filter_two_edges", "Show only nodes with multiple connections", value = FALSE),
-    hr(),
-    helpText("Select nodes from the dropdown or click them on the graph. Click empty space to reset.")
+    helpText("Select nodes from the dropdown or by click one or multiple nodes on the graph. Click empty space to reset.")
   ),
-  
-  visNetworkOutput("network_plot", height = "800px")
+  card(
+    card_header(
+      class = "d-flex justify-content-between align-items-center",
+      
+      span("Hormone association with plasma proteins and CMD phenotypes from Zhernakova et al., submitted"),
+      
+      actionButton("btn_show_legend", "Method & Legend", 
+                   icon = icon("info-circle"), 
+                   class = "btn-primary btn-sm") 
+    ),
+    card_body(
+      visNetworkOutput("network_plot", height = "800px")
+    )
+  )
 )
 
+# -------------------------------------------------- 
+
 server <- function(input, output, session) {
+  observeEvent(input$btn_show_legend, {
+    showModal(modalDialog(
+      title = "Network Methods & Legend",
+      size = "l", 
+      easyClose = TRUE, 
+      
+      h4("Method Description"),
+      p("This network visualizes significant associations between plasma levels of sex hormones, proteins, and CMD-related phenotypes."),
+      p("The analsyses were performed in the longitudinal Women4Health cohort, which consists of 159 women followed during a natural menstrual cycle."),
+      p("Causal relationships between proteins and hormones/phenotypes were estimated using longitudinal cross-lagged panel models; protein - disease links were taken from a large Mendelian Randomization (MR) study"),
+      
+      hr(),
+      
+      h4("Legend"),
+      fluidRow(
+        column(6,
+               h5("Nodes (Features)"),
+               tags$div(style = "display: flex; align-items: center; margin-bottom: 5px;",
+                        tags$span(style = "width: 15px; height: 15px; background-color: #97C2FC; border-radius: 50%; display: inline-block; margin-right: 10px; border: 2px solid #2B7CE9;"),
+                        "Protein"),
+               tags$div(style = "display: flex; align-items: center; margin-bottom: 5px;",
+                        tags$span(style = "width: 15px; height: 15px; background-color: #98FB98; border-radius: 50%; display: inline-block; margin-right: 10px; border: 2px solid #2B7CE9;"),
+                        "Hormone"),
+               tags$div(style = "display: flex; align-items: center; margin-bottom: 5px;",
+                        tags$span(style = "width: 15px; height: 15px; background-color: #FFB6C1; border-radius: 50%; display: inline-block; margin-right: 10px; border: 2px solid #2B7CE9;"),
+                        "Phenotype"),
+               tags$div(style = "display: flex; align-items: center; margin-bottom: 5px;",
+                        tags$span(style = "width: 15px; height: 15px; background-color: #FFA500; display: inline-block; margin-right: 10px; border: 2px solid #2B7CE9;"),
+                        "Disease (MR Outcome)")
+        ),
+        column(6,
+               h5("Edges (Associations)"),
+               tags$div(style = "display: flex; align-items: center; margin-bottom: 5px;",
+                        tags$span(style = "width: 30px; height: 3px; background-color: #FF0000; display: inline-block; margin-right: 10px;"),
+                        "Positive Association"),
+               tags$div(style = "display: flex; align-items: center; margin-bottom: 5px;",
+                        tags$span(style = "width: 30px; height: 3px; background-color: #3498DB; display: inline-block; margin-right: 10px;"),
+                        "Negative Association"),
+               tags$div(style = "display: flex; align-items: center; margin-bottom: 5px;",
+                        tags$span(style = "width: 30px; height: 3px; border-top: 3px dashed #666; display: inline-block; margin-right: 10px;"),
+                        "Disease Association (MR)")
+        )
+      ),
+      footer = modalButton("Close")
+    ))
+  })
   
   # --- 1. Reactive Data ---
   graph_data <- reactive({
@@ -223,8 +279,6 @@ server <- function(input, output, session) {
         }",
         
         # Event 2: Click on Empty Space (Reset)
-        # We check if 'nodes' array is empty. If so, it's a background click.
-        # We send a random number to ensure Shiny registers it as a new event every time.
         click = "function(properties) { 
           if(properties.nodes.length === 0) {
             Shiny.setInputValue('empty_space_click', Math.random(), {priority: 'event'});
@@ -247,7 +301,7 @@ server <- function(input, output, session) {
     }
   })
   
-  # --- 5. NEW: Handle Empty Space Click (Reset) ---
+  # --- 5. Handle Empty Space Click (Reset) ---
   observeEvent(input$empty_space_click, {
     # Clear the dropdown. This will trigger the observer below to reset the graph style.
     updateSelectizeInput(session, "multi_node_select", selected = character(0))
