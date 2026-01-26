@@ -476,6 +476,7 @@ run_pca_nipals_per_tp <- function(d_wide, nPCs = 70){
     #tmp_wide <- na.omit(tmp_wide)
     pca <- pcaMethods::pca(tmp_wide, method = 'nipals', nPcs = nPCs, center = T, scale = 'vector')
     cumulative_variance <- cumsum(pca@R2)
+    cat("10 PCs explain", cumulative_variance[10], " of variance\n")
     num_pcs_80 <- c(num_pcs_80, which(cumulative_variance >= 0.80)[1])
     
     pca10 <- as.data.frame(pca@scores)[,1:10] %>%

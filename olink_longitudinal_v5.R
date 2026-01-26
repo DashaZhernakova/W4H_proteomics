@@ -75,29 +75,7 @@ joined_data_adj_covar <- full_join(covariates, d_wide_adj_covar, by = c("SampleI
 
 write.table(d_wide_adj_covar, file = paste0(out_basedir, "olink_batch12.intensity.bridged_all_proteins_lod150_wide_rm_outliers_4sd.phase_avg.adj_all_covariates.txt"), quote = F, sep = "\t", row.names = FALSE)
 
-### tmp
-#prot vs storage - non linearity
-prot_storage <- read.delim("results12/correlations_with_covariates/association_with_storage_time.txt", sep = "\t", as.is = T, check.names = F)
-prots_signif <- row.names(prot_storage[prot_storage$BH_pval < 0.05, ])
-res <- data.frame(matrix(nrow = length(prots_signif), ncol = 2))
-row.names(res) <- prots_signif
-colnames(res) <- c("gam_edf", "gam_storage_pval")
-#prot = 'SOST'
-for (prot in prots_signif){
-  d_subs <- left_join(d_wide[,c("ID", "phase", prot)], covariates[,c("ID", "phase", "storage_months")], by = c("ID", "phase"))
-  colnames(d_subs)[3] <- "prot"
-  d_subs$TP <- as.numeric(d_subs$phase)
-  d_subs$ID <- as.factor(d_subs$ID)
-  m <- gam(prot ~ s(TP, k = 4) + s(ID,  bs = 're') + s(storage_months), data = d_subs)
-  res[prot,] <- summary(m)$s.table["s(storage_months)", c(1,4)]
-}
 
-res <- na.omit(res) %>%
-  rownames_to_column("prot") %>%
-  mutate(across(-c( prot), as.numeric)) 
-
-res$gam_edf_round <- round(res$gam_edf)
-res$BH_pval <- p.adjust(res$gam_storage_pval, method = 'BH')
 ################################################################################
 # variance differences for each protein
 ################################################################################
@@ -243,6 +221,18 @@ ggplot(d_wide_adj_covar, aes(x = phase, y = CSF3, group = phase)) +
   theme_minimal() +
   ylab("CSF3 adjusted levels")
 dev.off()
+
+################################################################################
+# Proteins that change more than by 2 sds
+################################################################################
+prots_strong_changes <- d_wide %>%
+  select(-SampleID) %>%
+  pivot_longer(-c(ID, phase), names_to = "Protein", values_to = "Val") %>%
+  group_by(Protein, phase) %>%
+  summarise(Mean = mean(Val, na.rm = TRUE), SD = sd(Val, na.rm = TRUE), .groups = "drop") %>%
+  group_by(Protein) %>%
+  filter(phase != "EL", abs(Mean - Mean[phase == "F"]) > SD[phase == "F"])
+
 
 ################################################################################
 # Protein vs TP GAM and LMM
@@ -414,11 +404,11 @@ for (ph in c(all_hormones, all_phenos)){
       labels = c("F", "O", "EL", "LL")
     )
 }
-pdf(paste0(out_basedir,"/plots/hormones_gam_withpoints.pdf"), height = 7, width = 10)
+pdf(paste0(out_basedir,"/plots/hormones_gam_withpoints2.pdf"), height = 7, width = 10)
 grid.arrange(grobs = plot_list[names(plot_list) %in% all_hormones], ncol = 3, nrow = 2)  
 dev.off()
 
-pdf(paste0(out_basedir,"/plots/phenotypes_gam_withpoints.pdf"), height = 10, width = 7)
+pdf(paste0(out_basedir,"/plots/phenotypes_gam_withpoints2.pdf"), height = 10, width = 7)
 grid.arrange(grobs = plot_list[names(plot_list) %in% all_phenos], ncol = 2, nrow = 5)  
 dev.off()
 
@@ -670,7 +660,7 @@ dev.off()
 
 ### Association with all hormones in the model
 
-gam_prot_all_pheno_together_adj_covar(d_wide, pheno[c("SampleID", "ID","phase", all_hormones)], "TFPI", covariates)
+gam_prot_all_pheno_together_adj_covar(d_wide, pheno[c("SampleID", "ID","phase", all_hormones)], "PROK1", covariates)
 
 ################################################################################
 # GAM hormones vs phenotypes all with all
@@ -884,28 +874,37 @@ network_data <- rbind(gam_res_hormones[gam_res_hormones$BH_pval < 0.05, c("prot"
 causal_forward <- paste(causal_links$cause, causal_links$consequence)
 
 network_data_swapped <- network_data %>%
-  rowwise() %>%
   mutate(
-    # Check both directions
+    # Check existence of both directions
     is_forward = paste(prot, pheno) %in% causal_forward,
     is_reverse = paste(pheno, prot) %in% causal_forward,
     
     # Determine if this edge has a defined direction
     has_direction = is_forward | is_reverse,
     
-    # Swap if it's a reverse causal relationship
-    prot_new = ifelse(is_reverse, pheno, prot),
-    pheno_new = ifelse(is_reverse, prot, pheno)
+    # KEY STEP: Determine how many rows we need.
+    # If it is bi-directional (both forward and reverse exist), we need 2 rows.
+    # Otherwise, we keep 1 row.
+    n_rows = ifelse(is_forward & is_reverse, 2, 1)
   ) %>%
-  ungroup() %>%
-  # Update columns and reorder
+  # Expand the dataframe: this duplicates the rows where n_rows is 2.
+  # .id = "row_id" creates a column (1 or 2) to distinguish the copies.
+  uncount(n_rows, .id = "row_id") %>%
   mutate(
-    prot = prot_new,
-    pheno = pheno_new,
-    .keep = "unused"  # Remove the intermediate columns
+    # Logic to determine if we swap the nodes:
+    # Swap if:
+    # 1. It is strictly a reverse relationship (Reverse is T, Forward is F)
+    # 2. OR It is the second copy of a bi-directional relationship (row_id == 2)
+    should_swap = (is_reverse & !is_forward) | (row_id == 2),
+    
+    prot_new = ifelse(should_swap, pheno, prot),
+    pheno_new = ifelse(should_swap, prot, pheno)
   ) %>%
-  # Reorder columns (has_direction first or last as you prefer)
-  select(prot, pheno, estimate, has_direction)
+  # Select and rename final columns
+  select(prot = prot_new, pheno = pheno_new, estimate, has_direction) %>%
+  # Optional: Ensure no exact duplicates if your original data had overlaps
+  distinct()
+
 
 nodes_data <- unique(rbind(data.frame(feature = gam_res_hormones[gam_res_hormones$BH_pval < 0.05,"prot"], type = "protein"),
                     data.frame(feature = gam_res_hormones[gam_res_hormones$BH_pval < 0.05,"pheno"], type = "hormone"),

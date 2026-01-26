@@ -5,6 +5,7 @@ setwd("/Users/Dasha/work/Sardinia/W4H/olink/batch12/")
 fname = "data/olink_batch12.intensity.bridged_all_proteins_lod150_wide_rm_outliers_4sd.txt"
 fname = "../../phenotypes/batch12/cleaned_phenotypes_251125_uniformed_adjusted.withHOMA.log_some.txt"
 fname = "results12/covariates_olink_batch12.txt"
+fname = "mb_covariates.txt"
 
 phases <- read.delim("../../phenotypes/batch12/phases_251125.csv", as.is = T, check.names = F, sep = ",")
 

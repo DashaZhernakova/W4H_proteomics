@@ -2,6 +2,7 @@ library(shiny)
 library(visNetwork)
 library(dplyr)
 library(readr)
+library(bslib)
 
 setwd("/Users/Dasha/work/Sardinia/W4H/olink/batch12/results12/intensity_shared_prots_261125/network")
 edges_data <- read.delim("network.spline.edges.causality2.with_pheno-pheno.txt", sep = "\t", check.names = F, as.is = T)  
@@ -11,7 +12,6 @@ annot <- read.delim("Su_MR.subset_cut.txt", sep = "\t", check.names = F, as.is =
 node_counts <- table(c(edges_data$prot, edges_data$pheno))
 node_sel <- names(node_counts[node_counts > 1])
 nodes_data$nodes_to_select <- ifelse(nodes_data$feature %in% node_sel, TRUE, FALSE)
-
 
 # Process edges data
 edges_vis <- edges_data %>%
@@ -31,13 +31,12 @@ edges_vis <- edges_data %>%
     smooth = F,
   )
 
-# Process nodes data WITH CORRECTED FONT SETTINGS
+# Process nodes data
 nodes_vis <- nodes_data %>%
-  # 1) FILTER: Keep only nodes that appear in edges
   filter(feature %in% c(edges_vis$from, edges_vis$to)) %>%
   mutate(
     id = feature,
-    label = feature,  # This makes the name visible on the node
+    label = feature,  
     title = paste0("Type: ", type, "<br>ID: ", feature),
     color = case_when(
       type == "protein" ~ "#97C2FC",
@@ -49,7 +48,6 @@ nodes_vis <- nodes_data %>%
     size = 25,
     borderWidth = 2,
     borderWidthSelected = 4
-    # Font settings will be applied separately (see below)
   )
 
 edges_with_types <- edges_vis %>%
@@ -59,151 +57,140 @@ edges_with_types <- edges_vis %>%
     edge_type_cat = paste(pmin(type_from, type_to), "-", pmax(type_from, type_to))
   )
 
+# MR disease annot
+annot_flt <- annot %>% filter(Assay %in% nodes_vis$feature)
 
-ui <- fluidPage(
-  titlePanel("Interactive Network"),
-  sidebarLayout(
-    sidebarPanel(
-      checkboxGroupInput("edge_filters", 
-                         "Show Edge Types:",
-                         choices = c("hormone - hormone",
-                                     "phenotype - phenotype",
-                                     "hormone - phenotype", 
-                                     "hormone - protein", 
-                                     "phenotype - protein"),
-                         selected = c("hormone - hormone",
-                                      "phenotype - phenotype",
-                                      "hormone - phenotype", 
-                                      "hormone - protein", 
-                                      "phenotype - protein")),
-      hr(),
-      checkboxInput(
-        inputId = "filter_strong", 
-        label = "Show only associations with |estimate| > 0.15", 
-        value = TRUE
-      ),
-      hr(),
-      checkboxInput(
-        inputId = "filter_two_edges", 
-        label = "Show Nodes with Multiple Connections", 
-        value = TRUE
-      ),
-      hr(),
-      checkboxInput(
-        inputId = "show_diseases",
-        label = "Show Associated Diseases (MR)",
-        value = FALSE
-      ),
-      helpText("Disease nodes will appear as Orange Boxes connected to Proteins."),
-      hr(),
-      helpText("The network will automatically hide edges that point to filtered-out nodes.")
-    ),
-    mainPanel(
-      visNetworkOutput("network_plot", height = "800px")
-    )
-  )
+disease_edges_all <- data.frame(
+  from = annot_flt$Assay,
+  to = annot_flt$MR_outcomes,
+  color = case_when(
+    annot_flt$Beta > 0 ~ "#FF0000",
+    annot_flt$Beta < 0 ~ "#3498DB",
+  ),      
+  dashes = TRUE,
+  width = 1.5,
+  arrows = 'to',
+  smooth = FALSE,
+  title = paste("Protein:", annot_flt$Assay, "<br>Disease:", annot_flt$MR_outcomes),
+  edge_type_cat = "protein - disease",
+  strong_assoc = FALSE
 )
 
-server <- function(input, output) {
+unique_diseases_all <- unique(annot_flt$MR_outcomes)
+
+disease_nodes_all <- data.frame(
+  id = unique_diseases_all,
+  feature = unique_diseases_all,
+  label = unique_diseases_all,
+  title = paste("Disease (MR Outcome):", unique_diseases_all),
+  type = "disease",
+  color = "#FFA500",
+  shape = "box",
+  size = 40,
+  borderWidth = 2,
+  borderWidthSelected = 4,
+  widthConstraint = 150,
+  node_with_two_edges = NA
+)
+
+ui <- page_sidebar(
   
-  output$network_plot <- renderVisNetwork({
+  sidebar = sidebar(
+    checkboxGroupInput("edge_filters", 
+                       "Show Edge Types:",
+                       choices = c("hormone - hormone",
+                                   "phenotype - phenotype",
+                                   "hormone - phenotype", 
+                                   "hormone - protein", 
+                                   "phenotype - protein"),
+                       selected = c("hormone - hormone",
+                                    "phenotype - phenotype",
+                                    "hormone - phenotype", 
+                                    "hormone - protein", 
+                                    "phenotype - protein")),
+    hr(),
+    checkboxInput(
+      inputId = "filter_strong", 
+      label = "Show only associations with |estimate| > 0.15", 
+      value = TRUE
+    ),
+    hr(),
+    checkboxInput(
+      inputId = "filter_two_edges", 
+      label = "Show Nodes with Multiple Connections", 
+      value = TRUE
+    ),
+    hr(),
+    checkboxInput(
+      inputId = "show_diseases",
+      label = "Show Associated Diseases (MR)",
+      value = FALSE
+    ),
+    hr(),
+    helpText("Click a node to highlight its specific connections. Click empty space to reset.")
+  ),
+  
+  visNetworkOutput("network_plot", height = "800px")
+)
+
+server <- function(input, output, session) {
+  
+  # --- 1. Reactive Data ---
+  graph_data <- reactive({
     
-    # --- 1. Filter edges based on Category ---
     filtered_edges <- edges_with_types %>%
       filter(edge_type_cat %in% input$edge_filters)
     
-    # --- 2. Filter edges based on Strong Association ---
     if (isTRUE(input$filter_strong)) {
       filtered_edges <- filtered_edges %>%
         filter(strong_assoc == TRUE)
     }
     
-    # --- 3. Initial Node Selection ---
-    # Select nodes that are part of the currently filtered edges
     active_node_ids <- unique(c(filtered_edges$from, filtered_edges$to))
     filtered_nodes <- nodes_vis %>% filter(id %in% active_node_ids)
     
-    # --- 4. Filter Nodes based on 'Two-Edge' Checkbox ---
     if (isTRUE(input$filter_two_edges)) {
-      
-      # Step A: Filter by the static column
       filtered_nodes <- filtered_nodes %>%
         filter(node_with_two_edges == TRUE)
       
-      # Step B: Filter by VISIBLE degree
-      # We calculate how many edges each node has in the CURRENT filtered_edges
-      # and remove nodes that have fewer than 2 edges visible.
       current_degrees <- table(c(filtered_edges$from, filtered_edges$to))
       nodes_with_2_plus_edges <- names(current_degrees[current_degrees >= 2])
       
       filtered_nodes <- filtered_nodes %>%
         filter(id %in% nodes_with_2_plus_edges)
       
-      # Step C: Re-sync Edges
-      # Remove edges connected to nodes we just filtered out
       filtered_edges <- filtered_edges %>%
         filter(from %in% filtered_nodes$id & to %in% filtered_nodes$id)
       
-      # Step D: Final Cleanup (Optional but recommended)
-      # If removing edges in Step C left some NEW nodes floating (0 edges), remove them.
       final_active_ids <- unique(c(filtered_edges$from, filtered_edges$to))
       filtered_nodes <- filtered_nodes %>% filter(id %in% final_active_ids)
     }
+    
     if (isTRUE(input$show_diseases)) {
-      
-      # 1. Identify currently visible proteins
-      # We assume the 'annot' Assay column matches the node IDs
       visible_proteins <- filtered_nodes$id
-      
-      # 2. Filter 'annot' for these proteins
-      annot_filtered <- annot %>% 
-        filter(Assay %in% visible_proteins)
+      disease_edges <- disease_edges_all %>% filter(from %in% visible_proteins)
       
       if (nrow(annot_filtered) > 0) {
-        # 3. Create Disease Edges 
-        disease_edges <- data.frame(
-          from = annot_filtered$Assay,
-          to = annot_filtered$MR_outcomes,
-          color = case_when(
-            annot_filtered$Beta > 0 ~ "#FF0000",
-            annot_filtered$Beta < 0 ~ "#3498DB",
-          ),      
-          dashes = TRUE,          # Dashed lines to distinguish from causal network
-          width = 1.5,
-          arrow = 'to',
-          smooth = FALSE,
-          title = paste("Protein:", annot_filtered$Assay, "<br>Disease:", annot_filtered$MR_outcomes),
-          edge_type_cat = "protein - disease" # Helper column
-        )
+        disease_nodes <- disease_nodes_all %>% filter(id %in% disease_edges$to)
         
-        # 4. Create Disease Nodes
-        # We need unique diseases from the filtered annotation
-        unique_diseases <- unique(annot_filtered$MR_outcomes)
-        
-        disease_nodes <- data.frame(
-          id = unique_diseases,
-          feature = unique_diseases,
-          label = unique_diseases,
-          title = paste("Disease (MR Outcome):", unique_diseases),
-          type = "disease",
-          color = "#FFA500",      # Orange color
-          shape = "box",          # Box shape to distinguish from molecules
-          size = 75,
-          borderWidth = 2,
-          borderWidthSelected = 4,
-          widthConstraint = 150,
-          node_with_two_edges = FALSE # Logic flag, not strictly used for display
-        )
-        
-        # 5. Merge with existing Network Data
-        # bind_rows will fill missing columns with NA, which visNetwork ignores
         filtered_edges <- bind_rows(filtered_edges, disease_edges)
         filtered_nodes <- bind_rows(filtered_nodes, disease_nodes)
       }
     }
     
-    # --- 5. Render Network ---
-    visNetwork(nodes = filtered_nodes, edges = filtered_edges) %>%
+    # Add Edge IDs for Proxy
+    filtered_edges <- filtered_edges %>% mutate(id = paste0("e", row_number()))
+    
+    filtered_nodes <- filtered_nodes %>% arrange(id)
+    
+    list(nodes = filtered_nodes, edges = filtered_edges)
+  })
+  
+  # --- 2. Render Network ---
+  output$network_plot <- renderVisNetwork({
+    dat <- graph_data()
+    
+    visNetwork(nodes = dat$nodes, edges = dat$edges) %>%
       visNodes(
         shape = "circle",
         widthConstraint = list(minimum = 75, maximum = 75), 
@@ -211,19 +198,14 @@ server <- function(input, output) {
         font = list(size = 16, color = "#000000", face = "arial", strokeWidth = 0),
         opacity = 1,
         scaling = list(
-          label = list(
-            enabled = TRUE,
-            min = 20,
-            max = 50,
-            maxVisible = 10000
-          )
+          label = list(enabled = TRUE, min = 20, max = 50, maxVisible = 10000)
         )
       ) %>%
       visOptions(
-        highlightNearest = list(enabled = TRUE, degree = 1, hover = FALSE, hideColor = "rgba(200,200,200,0.2)"),
+        highlightNearest = FALSE, 
         nodesIdSelection = list(
           enabled = TRUE,
-          values = sort(unique(filtered_nodes$id)) # Explicitly sort the IDs here
+          values = sort(unique(dat$nodes$id))
         )
       ) %>%
       visPhysics(
@@ -242,6 +224,57 @@ server <- function(input, output) {
       visInteraction(
         hideNodesOnDrag = FALSE, hideEdgesOnDrag = FALSE
       )
+  })
+  
+  # --- 3. Custom Selection Logic ---
+  observeEvent(input$network_plot_selected, {
+    
+    selected_id <- input$network_plot_selected
+    dat <- graph_data()
+    current_nodes <- dat$nodes
+    current_edges <- dat$edges
+    
+    proxy <- visNetworkProxy("network_plot")
+    
+    if (is.null(selected_id) || selected_id == "") {
+      
+      # --- RESET LOGIC ---
+      # We must explicitly set opacity = 1 because the highlight logic reduced it
+      nodes_reset <- current_nodes %>% mutate(opacity = 1)
+      edges_reset <- current_edges # Original colors
+      
+      visUpdateNodes(proxy, nodes = nodes_reset)
+      visUpdateEdges(proxy, edges = edges_reset)
+      
+    } else {
+      
+      # --- HIGHLIGHT LOGIC ---
+      
+      # 1. Identify neighbors
+      incident_edges <- current_edges %>% 
+        filter(from == selected_id | to == selected_id)
+      
+      neighbor_ids <- unique(c(incident_edges$from, incident_edges$to))
+      nodes_to_keep_ids <- unique(c(selected_id, neighbor_ids))
+      edges_to_keep_ids <- incident_edges$id
+      
+      # 2. Dim others (Nodes)
+      nodes_update <- current_nodes %>%
+        mutate(
+          color = ifelse(id %in% nodes_to_keep_ids, color, "rgba(200,200,200,0.3)"),
+          opacity = ifelse(id %in% nodes_to_keep_ids, 1, 0.3)
+        )
+      
+      # 3. Dim others (Edges)
+      edges_update <- current_edges %>%
+        mutate(
+          color = ifelse(id %in% edges_to_keep_ids, color, "rgba(220,220,220,0.1)"),
+          width = ifelse(id %in% edges_to_keep_ids, width, 1)
+        )
+      
+      visUpdateNodes(proxy, nodes = nodes_update)
+      visUpdateEdges(proxy, edges = edges_update)
+    }
   })
 }
 
