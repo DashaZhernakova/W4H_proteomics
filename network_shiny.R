@@ -4,6 +4,7 @@ library(dplyr)
 library(readr)
 library(bslib)
 
+# --- DATA LOADING ---
 setwd("/Users/Dasha/work/Sardinia/W4H/olink/batch12/results12/intensity_shared_prots_261125/network")
 edges_data <- read.delim("network.spline.edges.causality2.with_pheno-pheno.txt", sep = "\t", check.names = F, as.is = T)  
 nodes_data <- read.delim("network.spline.nodes.txt", sep = "\t", check.names = F, as.is = T) 
@@ -94,8 +95,13 @@ disease_nodes_all <- data.frame(
 )
 
 ui <- page_sidebar(
-  
   sidebar = sidebar(
+    selectizeInput("multi_node_select", 
+                   "Select Nodes (Multiple):", 
+                   choices = NULL, 
+                   multiple = TRUE,
+                   options = list(placeholder = 'Type or select nodes...')),
+    hr(),
     checkboxGroupInput("edge_filters", 
                        "Show Edge Types:",
                        choices = c("hormone - hormone",
@@ -109,25 +115,13 @@ ui <- page_sidebar(
                                     "hormone - protein", 
                                     "phenotype - protein")),
     hr(),
-    checkboxInput(
-      inputId = "filter_strong", 
-      label = "Show only associations with |estimate| > 0.15", 
-      value = TRUE
-    ),
+    checkboxInput("show_diseases", "Show associated diseases (based on MR)", value = FALSE),
     hr(),
-    checkboxInput(
-      inputId = "filter_two_edges", 
-      label = "Show Nodes with Multiple Connections", 
-      value = TRUE
-    ),
+    checkboxInput("filter_strong", "Show only associations with |estimate| > 0.15", value = FALSE),
     hr(),
-    checkboxInput(
-      inputId = "show_diseases",
-      label = "Show Associated Diseases (MR)",
-      value = FALSE
-    ),
+    checkboxInput("filter_two_edges", "Show only nodes with multiple connections", value = FALSE),
     hr(),
-    helpText("Click a node to highlight its specific connections. Click empty space to reset.")
+    helpText("Select nodes from the dropdown or click them on the graph. Click empty space to reset.")
   ),
   
   visNetworkOutput("network_plot", height = "800px")
@@ -170,23 +164,28 @@ server <- function(input, output, session) {
       visible_proteins <- filtered_nodes$id
       disease_edges <- disease_edges_all %>% filter(from %in% visible_proteins)
       
-      if (nrow(annot_filtered) > 0) {
+      if (nrow(disease_edges) > 0) {
         disease_nodes <- disease_nodes_all %>% filter(id %in% disease_edges$to)
-        
         filtered_edges <- bind_rows(filtered_edges, disease_edges)
         filtered_nodes <- bind_rows(filtered_nodes, disease_nodes)
       }
     }
     
-    # Add Edge IDs for Proxy
     filtered_edges <- filtered_edges %>% mutate(id = paste0("e", row_number()))
-    
     filtered_nodes <- filtered_nodes %>% arrange(id)
     
     list(nodes = filtered_nodes, edges = filtered_edges)
   })
   
-  # --- 2. Render Network ---
+  # --- 2. Update Dropdown Choices ---
+  observe({
+    dat <- graph_data()
+    updateSelectizeInput(session, "multi_node_select", 
+                         choices = sort(unique(dat$nodes$id)),
+                         server = TRUE)
+  })
+  
+  # --- 3. Render Network ---
   output$network_plot <- renderVisNetwork({
     dat <- graph_data()
     
@@ -202,11 +201,8 @@ server <- function(input, output, session) {
         )
       ) %>%
       visOptions(
-        highlightNearest = FALSE, 
-        nodesIdSelection = list(
-          enabled = TRUE,
-          values = sort(unique(dat$nodes$id))
-        )
+        highlightNearest = FALSE,
+        nodesIdSelection = FALSE 
       ) %>%
       visPhysics(
         solver = "forceAtlas2Based",
@@ -219,29 +215,58 @@ server <- function(input, output, session) {
         stabilization = list(iterations = 150)
       ) %>%
       visEvents(
-        stabilizationIterationsDone = "function() { this.setOptions({physics: false}); }"
+        stabilizationIterationsDone = "function() { this.setOptions({physics: false}); }",
+        
+        # Event 1: Click on a Node
+        selectNode = "function(properties) { 
+          Shiny.setInputValue('current_node_click', properties.nodes[0], {priority: 'event'}); 
+        }",
+        
+        # Event 2: Click on Empty Space (Reset)
+        # We check if 'nodes' array is empty. If so, it's a background click.
+        # We send a random number to ensure Shiny registers it as a new event every time.
+        click = "function(properties) { 
+          if(properties.nodes.length === 0) {
+            Shiny.setInputValue('empty_space_click', Math.random(), {priority: 'event'});
+          }
+        }"
       ) %>%
       visInteraction(
-        hideNodesOnDrag = FALSE, hideEdgesOnDrag = FALSE
+        hideNodesOnDrag = FALSE, hideEdgesOnDrag = FALSE, multiselect = TRUE
       )
   })
   
-  # --- 3. Custom Selection Logic ---
-  observeEvent(input$network_plot_selected, {
+  # --- 4. Sync Graph Clicks to Dropdown ---
+  observeEvent(input$current_node_click, {
+    clicked_node <- input$current_node_click
+    current_selection <- input$multi_node_select
     
-    selected_id <- input$network_plot_selected
+    if (!(clicked_node %in% current_selection)) {
+      updateSelectizeInput(session, "multi_node_select", 
+                           selected = c(current_selection, clicked_node))
+    }
+  })
+  
+  # --- 5. NEW: Handle Empty Space Click (Reset) ---
+  observeEvent(input$empty_space_click, {
+    # Clear the dropdown. This will trigger the observer below to reset the graph style.
+    updateSelectizeInput(session, "multi_node_select", selected = character(0))
+  })
+  
+  # --- 6. Multi-Selection Highlighting Logic ---
+  observeEvent(input$multi_node_select, {
+    
+    selected_ids <- input$multi_node_select
     dat <- graph_data()
     current_nodes <- dat$nodes
     current_edges <- dat$edges
     
     proxy <- visNetworkProxy("network_plot")
     
-    if (is.null(selected_id) || selected_id == "") {
-      
-      # --- RESET LOGIC ---
-      # We must explicitly set opacity = 1 because the highlight logic reduced it
+    # --- RESET LOGIC ---
+    if (is.null(selected_ids) || length(selected_ids) == 0) {
       nodes_reset <- current_nodes %>% mutate(opacity = 1)
-      edges_reset <- current_edges # Original colors
+      edges_reset <- current_edges 
       
       visUpdateNodes(proxy, nodes = nodes_reset)
       visUpdateEdges(proxy, edges = edges_reset)
@@ -249,23 +274,19 @@ server <- function(input, output, session) {
     } else {
       
       # --- HIGHLIGHT LOGIC ---
-      
-      # 1. Identify neighbors
       incident_edges <- current_edges %>% 
-        filter(from == selected_id | to == selected_id)
+        filter(from %in% selected_ids | to %in% selected_ids)
       
       neighbor_ids <- unique(c(incident_edges$from, incident_edges$to))
-      nodes_to_keep_ids <- unique(c(selected_id, neighbor_ids))
+      nodes_to_keep_ids <- unique(c(selected_ids, neighbor_ids))
       edges_to_keep_ids <- incident_edges$id
       
-      # 2. Dim others (Nodes)
       nodes_update <- current_nodes %>%
         mutate(
           color = ifelse(id %in% nodes_to_keep_ids, color, "rgba(200,200,200,0.3)"),
           opacity = ifelse(id %in% nodes_to_keep_ids, 1, 0.3)
         )
       
-      # 3. Dim others (Edges)
       edges_update <- current_edges %>%
         mutate(
           color = ifelse(id %in% edges_to_keep_ids, color, "rgba(220,220,220,0.1)"),
@@ -275,7 +296,7 @@ server <- function(input, output, session) {
       visUpdateNodes(proxy, nodes = nodes_update)
       visUpdateEdges(proxy, edges = edges_update)
     }
-  })
+  }, ignoreNULL = FALSE)
 }
 
 shinyApp(ui = ui, server = server)
