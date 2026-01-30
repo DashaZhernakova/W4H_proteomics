@@ -3,6 +3,7 @@ library(visNetwork)
 library(dplyr)
 library(readr)
 library(bslib)
+library(base64enc)
 
 setwd("/Users/Dasha/work/Sardinia/W4H/olink/batch12/results12/intensity_shared_prots_261125/network")
 edges_data <- read.delim("network.spline.edges.causality2.with_pheno-pheno.txt", sep = "\t", check.names = F, as.is = T)  
@@ -92,14 +93,25 @@ disease_nodes_all <- data.frame(
 )
 
 # -------------------------------------------------- 
+logo_base64 <- dataURI(file = "logo_2_1.png", mime = "")
 
 ui <- page_sidebar(
+  fillable = TRUE,
   sidebar = sidebar(
+    title = div(
+      img(src = logo_base64, 
+          style = "width: 100px; height: auto; margin-top: -30px; margin-bottom: 5px;margin-left: 25px")
+    ),
     selectizeInput("multi_node_select", 
                    "Select one or mulitple nodes:", 
                    choices = NULL, 
                    multiple = TRUE,
                    options = list(placeholder = 'Type or select nodes...')),
+    helpText(
+      tags$span(style = "font-size: 11px;", 
+                "Select nodes from the dropdown menu or by clicking one or multiple nodes on the graph. Click empty space to reset."
+      )
+    ),
     hr(),
     checkboxGroupInput("edge_filters", 
                        "Show edge types:",
@@ -116,21 +128,22 @@ ui <- page_sidebar(
     hr(),
     checkboxInput("show_diseases", "Show associated diseases (based on MR)", value = FALSE),
     checkboxInput("filter_strong", "Show only associations with |estimate| > 0.15", value = FALSE),
-    checkboxInput("filter_two_edges", "Show only nodes with multiple connections", value = FALSE),
-    helpText("Select nodes from the dropdown or by click one or multiple nodes on the graph. Click empty space to reset.")
+    checkboxInput("filter_two_edges", "Show only nodes with multiple connections", value = FALSE)
+    
   ),
   card(
     card_header(
       class = "d-flex justify-content-between align-items-center",
       
-      span("Hormone association with plasma proteins and CMD phenotypes from Zhernakova et al., submitted"),
+      span("Associations and causal relationships among  sex hormones, plasma proteins and CMD phenotypes from Zhernakova et al., submitted."),
       
       actionButton("btn_show_legend", "Method & Legend", 
                    icon = icon("info-circle"), 
                    class = "btn-primary btn-sm") 
     ),
     card_body(
-      visNetworkOutput("network_plot", height = "800px")
+      class = "p-0", 
+      visNetworkOutput("network_plot", height = "100%")
     )
   )
 )
