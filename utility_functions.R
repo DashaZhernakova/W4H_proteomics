@@ -16,7 +16,20 @@ library(RColorBrewer)
 library(limma)
 
 
+
+#' Performs association analysis between protein levels and phase or visit using GAMs
+#'
+#' @param d_wide data frame with proteins (in columns) for all samples (in rows). 
+#' @param prot protein name to run the GAM for 
+#' @param covariates data frame with all covariates to add to the model
+#' @param scale Logical. Whether to scale the data. Default is FALSE.
+#' @param rm_outliers Logical. Whether to remove outliers. Default is FALSE.
+#' @param predict Logical. Whether to generate predicted fitted values. Default is TRUE.
+#' @param anova_pval Logical. Whether to compute ANOVA p-values instead of normal GAM reported. Default is FALSE.
+#' @param n_points Numeric. Number of time points to use for predictions. Default is 20.
+#' 
 gam_prot_tp_adj_covar <- function(d_wide, prot, covariates, scale = F, rm_outliers = F, predict = T, anova_pval = F, n_points = 20){
+  # if d_wide has phases instead of visits convert phase letter into phase number
   phases = F
   if(! "TP" %in% colnames(d_wide) & "phase" %in% colnames(d_wide)){
     phases = T
@@ -28,6 +41,7 @@ gam_prot_tp_adj_covar <- function(d_wide, prot, covariates, scale = F, rm_outlie
     covariates$phase = NULL
   }
   
+  # combine protein and covariate datasets
   d_subs <- inner_join(d_wide[,c(prot, "SampleID", "ID", "TP")], covariates, by = c("SampleID", "ID", "TP"))
   colnames(d_subs)[1] <- "prot"
   
@@ -41,10 +55,13 @@ gam_prot_tp_adj_covar <- function(d_wide, prot, covariates, scale = F, rm_outlie
   
   covariate_names = colnames(covariates)[! colnames(covariates) %in% c("SampleID", "ID", "TP", "phase")]
   
+  # make GAM formula
   fo_gam <- as.formula(paste("prot ~ s(TP, k = 4) + s(ID,  bs = 're') + ", paste(covariate_names, collapse = "+")))
   fo_gam_null <- as.formula(paste("prot ~ s(ID,  bs = 're') + ", paste(covariate_names, collapse = "+")))
   
+  # Run the model
   model <- gam(fo_gam, data = d_subs,  method = 'REML')
+  
   if (anova_pval){
     model0 <- gam(fo_gam_null, data = d_subs, method = 'REML')
     an <- anova.gam(model, model0)
@@ -86,11 +103,25 @@ gam_prot_tp_adj_covar <- function(d_wide, prot, covariates, scale = F, rm_outlie
   return(list(pval = pval,  edf = edf, fval = fval, n = nrow(d_subs), n_samples = length(unique(d_subs$ID))))
 }
 
+#' Performs association analysis between protein and hormone/phenotype levels
+#'
+#' @param d_wide data frame with proteins (in columns) for all samples (in rows). 
+#' @param pheno data frame with phenotypes (in columns) for all samples (in rows). 
+#' @param prot protein name to use in the association
+#' @param ph phenotype name to use in the association
+#' @param covariates data frame with all covariates to add to the model
+#' @param scale Logical. Whether to scale the data. Default is FALSE.
+#' @param rm_outliers Logical. Whether to remove outliers. Default is FALSE.
+#' @param adjust_timepoint how to adjust for the phase/visit. Can be one of "none" (do not adjust for timepoint), "linear" (add timepoint as a parameteric term), "spline" (add timepoint as a spline term)
+#' @param adjust_pheno how to add the phenotype to the model: "linear" - as a linear parameteric term (default) or "spline" - as a spline term
+#' @param longitudinal Logical. Whether to run a GAM with random intercept (default) or a simple lm with no random effect
+#' @param add_age_interaction Logical. Whether to add interaction with age to the model
+#' 
 gam_prot_pheno_adj_covar <- function(d_wide, pheno, prot, ph, covariates, scale = F, rm_outliers = F, adjust_timepoint = 'spline', adjust_pheno = 'linear', anova_pval = F, predict = F, add_age_interaction = F, longitudinal = T){
+  # if data has phases instead of visits convert phase letter into phase number
   phases = F
   if(! "TP" %in% colnames(d_wide) & "phase" %in% colnames(d_wide)){
     phases = T
-    #cat("Working with phases not visit numbers!\n")
     d_wide$TP <- as.numeric(d_wide$phase)
     d_wide$phase <- NULL
     pheno$TP <- as.numeric(pheno$phase)
@@ -122,6 +153,7 @@ gam_prot_pheno_adj_covar <- function(d_wide, pheno, prot, ph, covariates, scale 
   
   covariate_names <- colnames(covariates)[! colnames(covariates) %in% c("SampleID", "ID", "TP", "phase")]
   
+  # generate the GAM formula
   if (longitudinal){
     if (adjust_timepoint == 'spline'){
       fo_gam <- paste("prot ~ s(pheno) + s(TP, k = 4) + s(ID,  bs = 're') + ", paste(covariate_names, collapse = "+"))
@@ -146,8 +178,7 @@ gam_prot_pheno_adj_covar <- function(d_wide, pheno, prot, ph, covariates, scale 
     fo_gam <- paste0(fo_gam, " + pheno * Age")
     d_subs$Age <- scale(d_subs$Age)
   }
-  #print(fo_gam)
-  #print(str(d_subs))
+
   # Linear relation between protein and phenotype
   if (adjust_pheno != 'spline'){
     fo_gam <- gsub("s\\(pheno\\)", "pheno", fo_gam)
@@ -179,40 +210,21 @@ gam_prot_pheno_adj_covar <- function(d_wide, pheno, prot, ph, covariates, scale 
     pval <- summary(model)$s.table["s(pheno)","p-value"]
   }
   
-  if (predict){
-    covar_means <- as.data.frame(lapply(covariates[,covariate_names], function(x) if(is.numeric(x)) mean(x, na.rm = TRUE) else as.factor(2)))
-    
-    new_data <- expand.grid(
-      TP = seq(1, 4),
-      ID = unique(d_subs$ID),
-      pheno = seq(min(d_subs$pheno), max(d_subs$pheno), length.out = 50),
-      predicted = NA
-    ) %>%
-      bind_cols(
-        covar_means %>%
-          slice(1)   # to use the first row of covar_means
-      )
-    predictions <- predict.gam(model, newdata = new_data,  exclude = "s(ID)", se.fit = T)
-    new_data$predicted <- predictions$fit
-    new_data$SE <- predictions$se.fit
-    new_data$lower <- new_data$predicted - 1.96 * new_data$SE
-    new_data$upper <- new_data$predicted + 1.96 * new_data$SE
-    
-    new_data2 <- unique(new_data[,c("TP", "pheno","predicted", "lower", "upper")])
-    new_data2$TP <- as.factor(new_data2$TP)
-    
-    return(list(pval = pval,  edf = edf, fval = fval, n = nrow(d_subs), n_samples = length(unique(d_subs$ID)), new_data = new_data2))
-  } 
-  
   return(list(pval = pval,  edf = edf, fval = fval, n = nrow(d_subs), n_samples = length(unique(d_subs$ID))))
 }
 
-# test for association all hormones together
+#' test for association of a protein vs all hormones together
+#'
+#' @param d_wide data frame with proteins (in columns) for all samples (in rows)
+#' @param pheno data frame with hormones in columns and samples in rows
+#' @param covariates data frame of covariates to add to the model
+#' @param adjust_timepoint how to adjust for the phase/visit. Can be one of "none" (do not adjust for timepoint), "linear" (add timepoint as a parameteric term), "spline" (add timepoint as a spline term)
+#' 
 gam_prot_all_pheno_together_adj_covar <- function(d_wide, pheno, prot, covariates, scale = F, adjust_timepoint = 'spline'){
+  # if data has phases instead of visits convert phase letter into phase number
   phases = F
   if(! "TP" %in% colnames(d_wide) & "phase" %in% colnames(d_wide)){
     phases = T
-    #cat("Working with phases not visit numbers!\n")
     d_wide$TP <- as.numeric(d_wide$phase)
     d_wide$phase <- NULL
     pheno$TP <- as.numeric(pheno$phase)
@@ -252,8 +264,7 @@ gam_prot_all_pheno_together_adj_covar <- function(d_wide, pheno, prot, covariate
     stop ("Wrong adjust_timepoint argument. Should be one of spline, linear or none.")
   }
   
-  # Linear relation between protein and phenotype
-  
+  # Run the GAM
   model <- gam(as.formula(fo_gam), data = d_subs, method = 'REML')
   
   ests <- summary(model)$p.table[pheno_names,"Estimate"]
@@ -263,8 +274,15 @@ gam_prot_all_pheno_together_adj_covar <- function(d_wide, pheno, prot, covariate
   return(list(pvals = pvals,  ests = ests, ses = ses, n = nrow(d_subs), n_samples = length(unique(d_subs$ID))))
 }
 
-
+#' Performs association analysis between protein levels and phase or visit using LMMs
+#'
+#' @param d_wide data frame with proteins (in columns) for all samples (in rows). 
+#' @param prot protein name to run the GAM for 
+#' @param covariates data frame with all covariates to add to the model
+#' @param scale Logical. Whether to scale the data. Default is FALSE.
+#' 
 lmm_prot_tp_poly3_adj_covar <- function(d_wide, prot, covariates, scale = F){
+  # if phases not visits, convert phase letter into phase number
   phases = F
   if(! "TP" %in% colnames(d_wide) & "phase" %in% colnames(d_wide)){
     phases = T
@@ -293,61 +311,20 @@ lmm_prot_tp_poly3_adj_covar <- function(d_wide, prot, covariates, scale = F){
   return(pval)
 }
 
-lmm_prot_tp_factor_adj_covar <- function(d_wide, prot, covariates, scale = F){
-  d_subs <- inner_join(d_wide[,c(prot, "ID", "TP")], covariates, by = c("ID"))
-  colnames(d_subs)[1] <- "prot"
-  
-  d_subs$TP <- as.factor(d_subs$TP)
-  d_subs <- na.omit(d_subs)
-  
-  fo_lmm <- as.formula(paste("prot ~ TP +", paste(colnames(covariates)[-1], collapse = "+"), "+ (1|ID)"))
-  model <- lmer(fo_lmm, data = d_subs)
-  fo_lmm_base <- as.formula(paste("prot ~ ", paste(colnames(covariates)[-1], collapse = "+"), "+ (1|ID)"))
-  model0 <- lmer(fo_lmm_base, data = d_subs)
-  an <- suppressMessages(anova(model, model0))
-  pval <- an$`Pr(>Chisq)`[2]
-  
-  return(pval)
-}
 
-lmm_pheno_prot_no_adj_covar <- function(d_wide, pheno, prot, ph,  scale = F, adjust_timepoint = "cubic"){
-  d_subs <- inner_join(d_wide[,c("SampleID", "ID", "TP", prot)], pheno[,c("SampleID" ,ph)], by = c("SampleID"))
-  
-  colnames(d_subs)[1:5] <- c("SampleID", "ID", "TP", "prot", "pheno")
-  d_subs$TP <- as.numeric(d_subs$TP)
-  d_subs <- na.omit(d_subs)
-  
-  if (scale) {
-    d_subs$prot <- scale(d_subs$prot)
-    d_subs$pheno <- scale(d_subs$pheno)
-  }
-  
-  if (adjust_timepoint == 'cubic'){
-    fo_lmm <- as.formula("prot ~ poly(TP, 3) + pheno + (1|ID)")
-    fo_lmm_base <- as.formula("prot ~ poly(TP, 3) + (1|ID)")
-  } else if (adjust_timepoint == 'linear') {
-    fo_lmm <- as.formula("prot ~ TP + pheno + (1|ID)")
-    fo_lmm_base <- as.formula("prot ~ TP +  (1|ID)")
-  } else if (adjust_timepoint == 'none') {
-    fo_lmm <- as.formula("prot ~ pheno + (1|ID)")
-    fo_lmm_base <- as.formula("prot ~  (1|ID)")
-  } else {
-    stop ("Wrong adjust_timepoint argument. Should be one of cubic, linear or none.")
-  }
-  
-  model <- lmer(fo_lmm, data = d_subs)
-  model0 <- lmer(fo_lmm_base, data = d_subs)
-  
-  est <- summary(model)$coefficients["pheno", "Estimate"]
-  se <- summary(model)$coefficients["pheno",2]
-  tval <- summary(model)$coefficients["pheno",3]
-  an <- suppressMessages(anova(model, model0))
-  pval <- an$`Pr(>Chisq)`[2]
-  
-  return(list(estimate = est, pval = pval, se = se, tval = tval))
-}
-
+#' Performs association analysis between protein and hormone/phenotype levels using LMMs
+#'
+#' @param d_wide data frame with proteins (in columns) for all samples (in rows). 
+#' @param pheno data frame with phenotypes (in columns) for all samples (in rows). 
+#' @param prot protein name to use in the association
+#' @param ph phenotype name to use in the association
+#' @param covariates data frame with all covariates to add to the model
+#' @param scale Logical. Whether to scale the data. Default is FALSE.
+#' @param adjust_timepoint how to adjust for the phase/visit. Can be one of "none" (do not adjust for timepoint), "linear" (add timepoint as a linear term), "cubic" (add timepoint as 3rd degree polynomial terms)
+#' @param longitudinal Logical. Whether to run a LMM with random intercept (default) or a simple lm with no random effect
+#' 
 lmm_pheno_prot_adj_covar <- function(d_wide, pheno, prot, ph, covariates, scale = F, adjust_timepoint = "cubic", longitudinal = T){
+  # if data has phases instead of visits convert phase letter into phase number
   phases = F
   if(! "TP" %in% colnames(d_wide) & "phase" %in% colnames(d_wide)){
     phases = T
@@ -444,7 +421,9 @@ lmm_prot_tp_interaction_pheno_adj_covar <- function(d_wide, pheno, prot, ph, cov
   return( pval)
 }
 
+# Run association between protein and phenotype using lm per phase/visit 
 lm_per_tp_pheno_prot_adj_covar <- function(d_wide, pheno, prot, ph, covariates, scale = F){
+  # if data has phases instead of visits convert phase letter into phase number
   phases = F
   if(! "TP" %in% colnames(d_wide) & "phase" %in% colnames(d_wide)){
     phases = T
@@ -496,20 +475,13 @@ lm_per_tp_pheno_prot_adj_covar <- function(d_wide, pheno, prot, ph, covariates, 
   return(res_table)
 }
 
-lmm_pheno_prot_inter <- function(d_wide, pheno, prot, ph){
-  d_subs <- inner_join(d_wide[,c("SampleID", "ID", "TP", prot)], pheno[,c("SampleID" ,ph)], by = c("SampleID"))
-  colnames(d_subs) <- c("SampleID", "ID", "TP", "prot", "pheno")
-  d_subs$TP <- as.numeric(d_subs$TP)
-  d_subs <- na.omit(d_subs)
-  model <- lmer(pheno ~ prot + TP + prot*TP + (1|ID), data = d_subs)
-  #est <- summary(model)$coefficients["prot", "Estimate"]
-  model0 <- lmer(pheno ~ prot + TP + (1|ID), data = d_subs)
-  an <- suppressMessages(anova(model, model0))
-  pval <- an$`Pr(>Chisq)`[2]
-  return(pval)
-}
-
+#' Calculate ICC using LMM
+#'
+#' @param d_wide data frame with proteins (in columns) for all samples (in rows). 
+#' @param prot protein name
+#' 
 get_ICC <- function(d_wide, prot){
+  # if data has phases instead of visits convert phase letter into phase number
   phases = F
   if(! "TP" %in% colnames(d_wide) & "phase" %in% colnames(d_wide)){
     phases = T
@@ -538,39 +510,12 @@ get_ICC <- function(d_wide, prot){
    return (list(ICC = prop_ID, var_tp = R2m))
 }
 
-fit_lmm_poly3_adj_covar <- function(d_wide, prot, n = 10, covariates, scale = F, poly_raw = F){
-  d_subs <- inner_join(d_wide[,c(prot, "SampleID", "ID", "TP")], covariates, by = c("ID"))
-  colnames(d_subs)[1] <- "prot"
-  
-  d_subs$TP <- as.numeric(d_subs$TP)
-  d_subs <- na.omit(d_subs)
-  d_subs$ID <- as.factor(d_subs$ID)
-  if (scale) d_subs[,"prot"] <- scale(d_subs[,"prot"])
-  
-  # make all columns with less than 3 unique values as factors  
-  d_subs[] <- lapply(d_subs, function(col) {
-    if (length(unique(col)) < 3) {
-      return(factor(col))
-    } else {
-      return(col)
-    }
-  })
-  
-  if (poly_raw){
-    fo_lmm <- as.formula(paste("prot ~ poly(TP, 3, raw = TRUE) +", paste(colnames(covariates)[-1], collapse = "+"), "+ (1|ID)"))
-  } else {
-    fo_lmm <- as.formula(paste("prot ~ poly(TP,3) +", paste(colnames(covariates)[-1], collapse = "+"), "+ (1|ID)"))
-  }
-  lmm_fit <- lmer(fo_lmm, data = d_subs)
-  
-  covar_means <- as.data.frame(lapply(covariates[,-1], function(x) if(is.numeric(x)) mean(x, na.rm = TRUE) else as.factor(2)))
-  new_data <- cbind(data.frame(TP = seq(1,4, length.out = n),  predicted = NA), covar_means)
-  new_data$predicted <- predict(lmm_fit, newdata = new_data, re.form = NA)
-  
-  coef <- summary(lmm_fit)$coefficients[grepl("poly\\(TP", row.names(summary(lmm_fit)$coefficients)),1]
-  return(list("predicted" = new_data$predicted, "coefficients" = coef))
-}
-
+#' Run differential abundance analysis using limma
+#'
+#' @param joined_data data frame with proteins and covariates together
+#' @param tp1 first phase to compare
+#' @param tp2 second phase to compare
+#' 
 run_limma<-function(joined_data, tp1, tp2) {
   df <-joined_data[joined_data$phase %in% c(tp1, tp2),]
   df$ID <- as.factor(df$ID)
@@ -605,6 +550,12 @@ run_limma<-function(joined_data, tp1, tp2) {
   return(DE_results)
 }
 
+#' Run paired wilcoxon test to compare protein levels between 2 phases
+#'
+#' @param joined_data_adj_covar data frame with proteins adjusted for covariates
+#' @param tp1 first phase to compare
+#' @param tp2 second phase to compare
+#' 
 run_wilcox <- function(joined_data_adj_covar, tp1, tp2) {
   joined_data_adj_covar$SampleID <- NULL
   wilcox_pvals <- data.frame(matrix(ncol = 3))
@@ -623,6 +574,7 @@ run_wilcox <- function(joined_data_adj_covar, tp1, tp2) {
   return(wilcox_pvals)
 }
 
+# Run Levene test to comapre protein variances between phases
 compare_variances_levene <- function(data) {
   data_long <- data %>%
     pivot_longer(-c(SampleID, ID, phase), 
@@ -653,6 +605,7 @@ compare_variances_levene <- function(data) {
   return(results)
 }
 
+# Get mean protein abundance per phase
 get_mean_per_tp <- function(d_wide, prot){
   d_subs <- d_wide[,c("ID", "TP", prot)]
   colnames(d_subs) <- c("ID", "TP", "prot")
@@ -662,17 +615,13 @@ get_mean_per_tp <- function(d_wide, prot){
   return(mean_prot_by_TP)
 }
 
-correlate_per_id <- function(d_wide, pheno, prot, ph){
-  d_subs <- inner_join(d_wide[,c("SampleID", "ID", "TP", prot)], pheno[,c("SampleID" ,ph)], by = c("SampleID"))
-  colnames(d_subs) <- c("SampleID", "ID", "TP", "prot", "pheno")
-  
-  cor_res <- d_subs %>% 
-    group_by(ID) %>%
-    summarise(correl = cor(prot, pheno, method = 'spearman'))
-  
-  return(cor_res)
-}
-
+#' A custom pivot wider function setting row names
+#'
+#' @param d long data frame
+#' @param row_names column to take the row names from
+#' @param names_from column to take the col names from
+#' @param values_from column to take the cell values from
+#' 
 my_pivot_wider <- function(d, row_names, names_from, values_from){
   d2 <- d[,c(row_names, names_from, values_from)] %>%
     pivot_wider(names_from = {{names_from}}, values_from = {{values_from}})
@@ -686,8 +635,15 @@ scale_this <- function(x){
   (x - mean(x, na.rm=TRUE)) / sd(x, na.rm=TRUE)
 }
 
+#' Regress covariates using a LMM
+#'
+#' @param data data frame to regress covariates from
+#' @param covar_data data frame with covariates to regress
+#' @param covars_longitudinal Logical. True if there are repeated measures
+#' @param keep_scale Logical. True if we want to keep the original scale after adjustment
 
 regress_covariates_lmm_phase <- function(data, covar_data, covars_longitudinal = T, keep_scale = F){
+  # if data has phases instead of visits convert phase letter into phase number
   phases = F
   if(! "TP" %in% colnames(data) & "phase" %in% colnames(data)){
     phases = T
@@ -749,6 +705,7 @@ regress_covariates_lmm_phase <- function(data, covar_data, covars_longitudinal =
   return(d_adj)
 }
 
+# Rename phase or visit number  number into phase letter
 rename_TP_to_phase <- function(d) {
   if (! "TP" %in% colnames(d)) {
     cat("error during converting visit to phase: no TP column!\n")
@@ -771,7 +728,7 @@ rename_TP_to_phase <- function(d) {
     dplyr::select(-TP)
 }
 
-
+#' Plot 2 trajectories together
 plot_together <- function(d_wide = NULL, pheno = NULL, prot, ph, annot = "", method = "gam", scale = T, trajectories = NULL){
   if(! is.null(trajectories)){
     prot_name <- sym(prot)
@@ -1145,51 +1102,6 @@ scatter_col_tp <- function(d_wide, pheno, prot, ph, scale = F, add_points = F){
   }
   g
 }
-
-plot_boxplot_with_traj <- function(d, d_adj, prot, covariates, add_pval = T) {
-  res_gam <- gam_prot_tp_adj_covar(d, prot, covariates, scale = F, predict = T)
-  
-  if("phase" %in% colnames(d_adj)) {
-    d_adj$TP <- as.numeric(d_adj$phase)
-  }
-  
-  traj <- data.frame(TP = seq(1,4, length.out = length(res_gam$predicted)), 
-                     pheno = res_gam$predicted, 
-                     lower = res_gam$lower, 
-                     upper = res_gam$upper)
-  
-  traj <- full_join(d_adj[,c("TP", "ID", prot)], traj, by = "TP")
-  colnames(traj)[3] <- "values"
-  
-  # Scale the adjusted values using raw data statistics
-  d_raw_subset <- inner_join(d[,c(prot, "SampleID")], covariates, by = "SampleID")
-  d_raw_subset <- na.omit(d_raw_subset) 
-  raw_mean <- mean(d_raw_subset[[prot]], na.rm = T)
-  raw_sd   <- sd(d_raw_subset[[prot]], na.rm = T)
-  
-  traj$values <- (traj$values - raw_mean) / raw_sd
-  traj$pheno <- (traj$pheno - raw_mean) / raw_sd
-  traj$lower <- (traj$lower - raw_mean) / raw_sd
-  traj$upper <- (traj$upper - raw_mean) / raw_sd
-  
-  
-  p <- ggplot(traj) + 
-    geom_boxplot(aes(x = TP, y = values, group = TP), width = 0.1, color = my_colors[3], outliers = F) +
-    geom_line(aes(x = TP, y = pheno), color = my_colors[4]) + 
-    geom_ribbon(aes(x = TP, ymin = lower, ymax = upper), alpha = 0.2, fill = my_colors[4]) +
-    geom_jitter(aes(x = TP, y = values), alpha = 0.2, width = 0.1, color = my_colors[3]) +
-    labs(x = "Phase ", y = prot) +
-    theme_minimal() + scale_x_continuous(
-      breaks = c(1, 2, 3, 4),
-      labels = c("F", "O", "EL", "LL")
-    )
- if (add_pval){
-   p <- p + ggtitle(paste0("GAM P = ", formatC(res_gam$pval, digits = 2)))
- }
-  p 
-}
-
-
 
 
 plot_boxplot_with_traj <- function(d_adj, prot) {
