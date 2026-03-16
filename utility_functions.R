@@ -311,6 +311,41 @@ lmm_prot_tp_poly3_adj_covar <- function(d_wide, prot, covariates, scale = F){
   return(pval)
 }
 
+#' Performs association analysis between protein levels and phase or visit using LMMs treating the phase/visit as a factor
+#'
+#' @param d_wide data frame with proteins (in columns) for all samples (in rows). 
+#' @param prot protein name to run the LMM for 
+#' @param covariates data frame with all covariates to add to the model
+#' @param scale Logical. Whether to scale the data. Default is TRUE
+#' 
+lmm_prot_tp_factor_adj_covar <- function(d_wide, prot, covariates, scale = T){
+  # if phases not visits, convert phase letter into phase number
+  phases = F
+  if(! "TP" %in% colnames(d_wide) & "phase" %in% colnames(d_wide)){
+    phases = T
+    #cat("Working with phases not visit numbers!\n")
+    d_wide$TP <- as.numeric(d_wide$phase)
+    d_wide$phase <- NULL
+    
+    covariates$TP <- as.numeric(covariates$phase)
+    covariates$phase = NULL
+  }
+  d_subs <- inner_join(d_wide[,c(prot, "SampleID","ID", "TP")], covariates, by = c("SampleID", "ID", "TP"))
+  colnames(d_subs)[1] <- "prot"
+  
+  d_subs$TP <- as.factor(d_subs$TP)
+  d_subs <- na.omit(d_subs)
+  
+  if (scale) d_subs$prot <- scale(d_subs$prot)
+  
+  covariate_names = colnames(covariates)[! colnames(covariates) %in% c("SampleID", "ID", "TP", "phase")]
+  
+  fo_lmm <- as.formula(paste("prot ~ TP +", paste(covariate_names, collapse = "+"), "+ (1|ID)"))
+  model <- lmer(fo_lmm, data = d_subs)
+  coefs <- summary(model)$coefficients
+  
+  return(list(betas = coefs[c("TP2", "TP3", "TP4"), "Estimate"], pvals = coefs[c("TP2", "TP3", "TP4"), "Pr(>|t|)"]))
+}
 
 #' Performs association analysis between protein and hormone/phenotype levels using LMMs
 #'
