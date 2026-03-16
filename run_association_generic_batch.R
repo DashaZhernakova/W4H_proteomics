@@ -44,7 +44,7 @@ if (run_gam){
 
 }
 if (run_lmm) {
-  lmm_res <- data.frame(matrix(nrow = length(prot_list) * (ncol(d2) -4), ncol = 8))
+  lmm_res <- data.frame(matrix(nrow = length(feature1_list) * length(all_features2), ncol = 8))
   colnames(lmm_res) <- c("feature1", "feature2", "estimate", "pval", "se", "tval", "N", "N_unique")
 
   cnt <- 1
