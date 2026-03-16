@@ -17,16 +17,17 @@ d1 <- read_file_add_phase(fname1)
 d2 <- read_file_add_phase(fname2)
 covariates  <- read_file_add_phase(covar_fname)
 
-feature1_list <- as.character(read.delim(prot_list_fname, as.is = T, check.names = F, sep = "\t", header = F))
+feature1_list <- as.character(read.delim(prot_list_fname, as.is = T, check.names = F, sep = "\t", header = F)$V1)
 
 all_features2 <- colnames(d2)[! colnames(d2) %in% c("ID", "SampleID", "TP", "phase")]
 
 cat("Running association analysis for ", length(feature1_list), " features\n")
 cat("File 1: ", fname1, "\n")
 cat("File 2: ", fname2, "\n")
-cat ("Covariates: ", colnames(covariates)[2:ncol(covariates)], "\n")
+cat ("Covariates: ", colnames(covariates)[! colnames(covariates) %in% c("ID", "SampleID", "TP", "phase")], "\n")
 
 if (run_gam){
+  cat("Running GAM\n")
   gam_res <- data.frame(matrix(nrow = length(feature1_list) * length(all_features2), ncol = 7))
   colnames(gam_res) <- c("feature1", "feature2", "pval", "edf_round", "fval", "n", " n_samples")
 
@@ -44,6 +45,7 @@ if (run_gam){
 
 }
 if (run_lmm) {
+  cat("Running LMM\n")
   lmm_res <- data.frame(matrix(nrow = length(feature1_list) * length(all_features2), ncol = 8))
   colnames(lmm_res) <- c("feature1", "feature2", "estimate", "pval", "se", "tval", "N", "N_unique")
 
