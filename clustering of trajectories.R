@@ -1,4 +1,4 @@
-Nlibrary(factoextra)
+library(factoextra)
 all_prots_traj <- read.delim(paste0(out_basedir, "trajectories_gam/protein_trajectories_gam_93_prots.txt"), as.is = T, check.names = F, sep = "\t", row.names = 1)
 
 n_points = 100
@@ -216,6 +216,101 @@ dev.off()
 
 
 
+#####
+#clustering of individual trajectories
+library(factoextra)
+set.seed(123) 
+
+tmp_complete <- d_wide_adj_covar %>%
+  filter(phase %in% all_phases) %>%
+  group_by(ID) %>%
+  filter(n_distinct(phase) == 4) %>%
+  ungroup()
+tmp_complete$phase <- factor(tmp_complete$phase, levels = all_phases)
+
+
+prot_name = 'PROK1'
+prot_name = 'REN'
+prot_name = 'LEP'
+prot_name = 'MMP7'
+prot_name = 'ADA2'
+p = cluster_individual_trajectories_per_prot(tmp_complete, prot_name, n_clusters = 3, all_prots_traj[prot_name,], center =T)
+p$p_traj
+p$p_clust
+
+
+cluster_individual_trajectories_per_prot <- function(tmp_complete, prot, n_clusters = 3, gam_pred = NULL, center = T){
+    
+  wide_data <- tmp_complete %>%
+    select(ID, phase, all_of(prot)) %>%
+    pivot_wider(names_from = phase, values_from = all_of(prot)) %>%
+    select(ID, all_of(all_phases))
+  
+  # Extract the numeric matrix (exclude ID column)
+  mat <- as.matrix(wide_data[, -1])
+  row.names(mat) <- wide_data$ID
+  # center per ID
+  if (center) {
+    mat_centered <- t(apply(mat, 1, function(row) row - mean(row)))
+  } else {
+    mat_centered = mat
+  }
+  
+  # Elbow + silhouette + gap statistic in one plot
+  p1 <- fviz_nbclust(mat_centered, kmeans, method = "wss")   # elbow
+  p2 <- fviz_nbclust(mat_centered, kmeans, method = "silhouette", print.summary = T)
+  #fviz_nbclust(mat_centered, kmeans, method = "gap_stat", nboot = 50)
+  
+  nclusters = n_clusters
+  km_centered <- kmeans(mat_centered, centers = nclusters, nstart = 25)
+  mat_centered <- as.data.frame(mat_centered)
+  mat_centered$cluster <- as.numeric(km_centered$cluster)
+  
+  plot_data <- mat_centered %>%
+    rownames_to_column("ID") %>%
+    select(ID, F, O, EL, LL, cluster) %>%
+    pivot_longer(cols = c(F, O, EL,LL),
+                 names_to = "phase",
+                 values_to = "value") %>%
+    mutate(phase = factor(phase, levels = all_phases), phase_num = as.numeric(phase))
+  
+  # Mean trajectory per cluster
+  cluster_means <- plot_data %>%
+    group_by(cluster, phase_num) %>%
+    summarise(mean = mean(value, na.rm = TRUE), .groups = "drop")
+  
+  if (!is.null(gam_pred)) {
+    gam_pred = as.data.frame(t(gam_pred)) %>%
+      rownames_to_column("phase_num") %>%
+      mutate(phase_num = as.numeric(phase_num))
+    colnames(gam_pred)[2] <- "GAM_curve"
+    if (center) gam_pred$GAM_curve <- gam_pred$GAM_curve - mean(gam_pred$GAM_curve)
+    p_traj <- ggplot(plot_data, aes(x = phase_num, y = value, group = ID, color = factor(cluster))) +
+      geom_line(alpha = 0.4) +
+      geom_line(data = cluster_means, aes(x = phase_num, y = mean, group = cluster, color = factor(cluster)),
+                linewidth = 1, inherit.aes = FALSE) +
+      geom_line(data = gam_pred, aes(x = phase_num, y = GAM_curve),
+                linewidth = 1, inherit.aes = FALSE) +
+      labs(title = paste0(prot, " trajectories by cluster"),
+           color = "Cluster") +
+      ylab("adjusted centered abundance") +
+      theme_minimal() +
+      scale_x_continuous(
+        breaks = c(1, 2, 3, 4),
+        labels = c("F", "O", "EL", "LL")
+      )
+  } else {
+  p_traj <- ggplot(plot_data, aes(x = phase, y = value, group = ID, color = factor(cluster))) +
+    geom_line(alpha = 0.4) +
+    geom_line(data = cluster_means, aes(x = phase, y = mean, group = cluster, color = factor(cluster)),
+               linewidth = 1, inherit.aes = FALSE) +
+    labs(title = paste0(prot, " trajectories by cluster"),
+         color = "Cluster") +
+    ylab("adjusted centered abundance") +
+    theme_minimal()
+  }
+  return(list(p_traj = p_traj, p_clust = (p1 + p2)))
+}
 
 
 

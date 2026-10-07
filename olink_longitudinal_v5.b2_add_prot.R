@@ -74,7 +74,7 @@ all_phases <- c("F", "O", "EL", "LL")
 covariates$batch <- NULL
 
 joined_data <- full_join(covariates, d_wide, by = c("SampleID", "ID", "phase"))
-d_wide_adj_covar <- regress_covariates_lmm(d_wide, covariates, covars_longitudinal = T)
+d_wide_adj_covar <- regress_covariates_lmm_phase(d_wide, covariates, covars_longitudinal = T)
 joined_data_adj_covar <- full_join(covariates, d_wide_adj_covar, by = c("SampleID", "ID", "phase"))
 
 write.table(d_wide_adj_covar, file = paste0(out_basedir, "olink_clean_adj_covariates.txt"), quote = F, sep = "\t", row.names = FALSE)
@@ -138,11 +138,11 @@ for (i in 1:nrow(phase_comb)){
   #tp2 <- as.character(tp2)
   
   # limma
-  limma_res <- run_limma(joined_data, tp1, tp2) %>%
+  limma_res <- run_limma(joined_data, tp1, tp2, all_prots) %>%
     rownames_to_column(var = 'prot')
-  if (nrow(limma_res[limma_res$adj.P.Val < 0.05,]) > 0) {
+
     limma_res_all <- rbind(limma_res_all, cbind(paste0(tp1, "_", tp2), limma_res))
-  }
+
   
   # wilcoxon
   #wilcox_res <- run_wilcox(joined_data_adj_covar, tp1, tp2)

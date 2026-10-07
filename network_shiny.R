@@ -5,10 +5,11 @@ library(readr)
 library(bslib)
 library(base64enc)
 
-setwd("/Users/Dasha/work/Sardinia/W4H/olink/batch12/results12/intensity_shared_prots_261125/network")
-edges_data <- read.delim("network.spline.edges.causality2.with_pheno-pheno.txt", sep = "\t", check.names = F, as.is = T)  
-nodes_data <- read.delim("network.spline.nodes.txt", sep = "\t", check.names = F, as.is = T) 
-annot <- read.delim("Su_MR.subset_cut.txt", sep = "\t", check.names = F, as.is = T)
+setwd("/Users/Dasha/work/Sardinia/W4H/olink/batch12/")
+out_basedir <- "results12/intensity_all_prots_220526/"
+edges_data <- read.delim(paste0(out_basedir, "/network/network.spline.edges.causality2.with_pheno-pheno.txt"), sep = "\t", check.names = F, as.is = T)  
+nodes_data <- read.delim(paste0(out_basedir, "/network/network.spline.nodes.txt"), sep = "\t", check.names = F, as.is = T) 
+annot <- read.delim(paste0(out_basedir,"/network/Su_MR.subset_cut.txt"), sep = "\t", check.names = F, as.is = T)
 
 node_counts <- table(c(edges_data$prot, edges_data$pheno))
 node_sel <- names(node_counts[node_counts > 1])
@@ -50,8 +51,8 @@ nodes_vis <- nodes_data %>%
   )
 
 edges_with_types <- edges_vis %>%
-  left_join(nodes_data %>% select(feature, type_from = type), by = c("from" = "feature")) %>%
-  left_join(nodes_data %>% select(feature, type_to = type), by = c("to" = "feature")) %>%
+  left_join(nodes_data %>% dplyr::select(feature, type_from = type), by = c("from" = "feature")) %>%
+  left_join(nodes_data %>% dplyr::select(feature, type_to = type), by = c("to" = "feature")) %>%
   mutate(
     edge_type_cat = paste(pmin(type_from, type_to), "-", pmax(type_from, type_to))
   )
@@ -93,7 +94,7 @@ disease_nodes_all <- data.frame(
 )
 
 # -------------------------------------------------- 
-logo_base64 <- dataURI(file = "logo_2_1.png", mime = "")
+logo_base64 <- dataURI(file = paste0(out_basedir, "/network/logo_2_1.png"), mime = "")
 
 ui <- page_sidebar(
   fillable = TRUE,

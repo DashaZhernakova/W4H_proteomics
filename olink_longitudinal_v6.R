@@ -3,6 +3,7 @@ setwd("/Users/Dasha/work/Sardinia/W4H/olink/batch12")
 source("/Users/Dasha/work/Sardinia/W4H/olink/scripts/utility_functions.R")
 
 library(ggplot2)
+library(ggExtra)
 library(rmcorr)
 library(dplyr)
 library(lme4)
@@ -14,7 +15,7 @@ library(patchwork)
 
 set.seed(123)
 
-out_basedir <- "results12/intensity_shared_prots_261125/"
+out_basedir <- "results12/intensity_all_prots_220526/"
 
 d_wide <- read.delim("data/olink_batch12.intensity.bridged_all_proteins_lod150_wide_rm_outliers_4sd.phase_avg.txt", as.is = T, check.names = F, sep = "\t")
 
@@ -50,31 +51,17 @@ covariates[] <- lapply(covariates, function(col) {
 covariate_names <- c("Age","BMI","batch", "from", "storage_months")
 covariates$from <- relevel(as.factor(covariates$from), ref = "X")
 
-shared_prots <- colnames(d_wide)[colSums(is.na(d_wide)) < 50]
-d_wide_shared <- d_wide[ ,shared_prots]
-all_prots <- colnames(d_wide_shared)[! colnames(d_wide_shared) %in% c("ID", "TP","phase","SampleID")]
-
-d_wide_b2 <- d_wide[d_wide$SampleID %in% covariates[covariates$batch == 'batch2', "SampleID"],]
-
-# remove overlapping prots from the b2 dataset
-d_wide_b2 <- d_wide_b2[, !colnames(d_wide_b2) %in% all_prots]
-
-dim(d_wide)
-dim(d_wide_b2)
-dim(d_wide_shared)
-
-d_wide_full <- d_wide
-d_wide <- d_wide_shared
 
 all_phases <- c("F", "O", "EL", "LL")
+all_prots <- colnames(d_wide)[! colnames(d_wide) %in% c("SampleID", "ID", "TP","phase")]
 
 joined_data <- full_join(covariates, d_wide, by = c("SampleID", "ID", "phase"))
 d_wide_adj_covar <- regress_covariates_lmm_phase(d_wide, covariates, covars_longitudinal = T)
-d_wide_adj_covar_orig_scale <- regress_covariates_lmm_phase(d_wide, covariates, covars_longitudinal = T, keep_scale = T)
+#d_wide_adj_covar_orig_scale <- regress_covariates_lmm_phase(d_wide, covariates, covars_longitudinal = T, keep_scale = T)
 
 joined_data_adj_covar <- full_join(covariates, d_wide_adj_covar, by = c("SampleID") )
 
-write.table(d_wide_adj_covar, file = paste0(out_basedir, "olink_batch12.intensity.bridged_all_proteins_lod150_wide_rm_outliers_4sd.phase_avg.adj_all_covariates.txt"), quote = F, sep = "\t", row.names = FALSE)
+write.table(d_wide_adj_covar, file = paste0(out_basedir, "olink_batch12.all_proteins.phase_avg.adj_all_covariates.txt"), quote = F, sep = "\t", row.names = FALSE)
 
 
 ################################################################################
@@ -135,31 +122,20 @@ mean_abund_per_phase_adj_covar <- mean_abund_per_phase_adj_covar_long %>%
   pivot_wider(names_from = phase, values_from = mean_prot)
 write.table(mean_abund_per_phase_adj_covar, file = paste0(out_basedir, "mean_abundance_per_phase_adj_covar.txt"), quote = F, sep = "\t", row.names = FALSE)
 
-# Run Limma DAP analysis
-limma_res_all <- data.frame()
-#wilcox_res_all <- data.frame()
-phase_comb <- t(combn(all_phases, 2))
-for (i in 1:nrow(phase_comb)){
-  tp1 = phase_comb[i,1]
-  tp2 = phase_comb[i,2]
-  #tp1 <- as.character(tp1)
-  #tp2 <- as.character(tp2)
-  
-  # limma
-  limma_res <- run_limma(joined_data, tp1, tp2) %>%
-    rownames_to_column(var = 'prot')
+# Read limma analysis
+b1_limma <- read.delim("results12/intensity_shared_prots_261125/limma_DEPs.txt", as.is = T, check.names = F, sep = "\t")
+b2_limma <- read.delim("results12/intensity_batch2_prots_261125//limma_DEPs.txt", as.is = T, check.names = F, sep = "\t")
 
-    limma_res_all <- rbind(limma_res_all, cbind(paste0(tp1, "_", tp2), limma_res))
+limma_res_all <- rbind(b1_limma, b2_limma)
+limma_res_all$adj.P.Val <- p.adjust(limma_res_all$P.Value, method = "BH")
+limma_res_all$sign <- limma_res_all$adj.P.Val < 0.05
 
-  
-  # wilcoxon
-  #wilcox_res <- run_wilcox(joined_data_adj_covar, tp1, tp2)
-  #wilcox_res_all <- rbind(wilcox_res_all, wilcox_res)
-}
-
-
-colnames(limma_res_all)[1] <- "phase1_phase2"
-limma_res_all$sign <- ifelse(limma_res_all$adj.P.Val < 0.05, T, F)
+# overlap with b1+2
+b1_sign <- unique(b1_limma[b1_limma$sign == T, "prot"])
+new_sign <- unique(limma_res_all[limma_res_all$sign == T, "prot"])
+length(b1_sign)
+length(new_sign)
+length(b1_sign[b1_sign %in% new_sign])
 
 # add means per phase to limma res
 limma_res_with_means <- limma_res_all %>%
@@ -228,25 +204,22 @@ prok1_plot <- ggplot(d_wide_adj_covar, aes(x = phase, y = PROK1, group = phase))
   geom_jitter(alpha = 0.2, width = 0.1, color = my_colors[3]) + 
   theme_minimal() +
   ylab("PROK1 adjusted levels")
-pdf(paste0(out_basedir, "plots/limma_DEPs_barplot_PROK1.pdf"), width = 5, height = 5)
+pdf(paste0(out_basedir, "plots/limma_DEPs_barplot_PROK1.pdf"), width = 3, height = 8)
 print((barplot + theme(legend.position="bottom"))/prok1_plot)
 dev.off()
 
 limma_res_all$signif_direction <- ifelse(limma_res_all$sign, ifelse(limma_res_all$logFC < 0, -1, 1), 0)
-# white-blue heatmap of FCs
-limma_heatmap <- my_pivot_wider(limma_res_all[limma_res_all$signif_direction != 0,], row_names = "prot", names_from = "phase1_phase2", values_from = "signif_direction")
-limma_heatmap[is.na(limma_heatmap)] <- 0
-h1 <- pheatmap(limma_heatmap, color = c(my_colors[3], "white", my_colors[2]), legend = F, cluster_cols = F)
 
 # colored heatmap of FCs
 prot_subs <- unique(limma_res_all[limma_res_all$sign == T, "prot"])
 limma_heatmap2 <- my_pivot_wider(limma_res_all[limma_res_all$prot %in% prot_subs,], "prot", "phase1_phase2", "logFC")
+limma_heatmap2[is.na(limma_heatmap2)] <- 0
 signif_labels <- my_pivot_wider(limma_res_all[limma_res_all$prot %in% prot_subs,], "prot", "phase1_phase2", "adj.P.Val")
 signif_labels <- ifelse(signif_labels < 0.05, "*", "")
+signif_labels[is.na(signif_labels)] <- ""
 
 
-
-max_val <- max(abs(min(limma_heatmap2[row.names(limma_heatmap2) != 'PROK1',])), max(limma_heatmap2[row.names(limma_heatmap2) != 'PROK1',]))
+max_val <- max(abs(min(limma_heatmap2[!row.names(limma_heatmap2) %in% c('PROK1', "CXCL13"),])), max(limma_heatmap2[!row.names(limma_heatmap2) %in% c('PROK1',"CXCL13"),]))
 limma_heatmap2[limma_heatmap2 > max_val] <- max_val
 breaksList = seq(-max_val, max_val, by = 0.01)
 if(!0 %in% breaksList) breaksList <- sort(c(breaksList, 0))
@@ -256,7 +229,9 @@ full_palette[ceiling(length(full_palette)/2)] <- "#FFFFFF"
 colorList <- colorRampPalette(full_palette)(length(breaksList))
 
 h2 <- pheatmap(limma_heatmap2, display_numbers = signif_labels, fontsize_number = 14, 
-              color = colorList, breaks = breaksList, cutree_rows = 4, cellwidth = 14, cellheight = 10)
+               cluster_cols = F, cluster_rows = T,
+               color = colorList, breaks = breaksList, cellwidth = 14, cellheight = 10,
+               cutree_rows = 4)
 
 clusters <- as.data.frame(cutree(h2$tree_row,4)) %>%
   rownames_to_column("prot")
@@ -268,7 +243,7 @@ mat_mean_abund_per_phase_adj_covar <- mean_abund_per_phase_adj_covar %>%
   column_to_rownames("Protein") %>%
   as.matrix()
 
-max_val <- max(abs(min(mat_mean_abund_per_phase_adj_covar[row.names(mat_mean_abund_per_phase_adj_covar) != 'PROK1',])), max(mat_mean_abund_per_phase_adj_covar[row.names(mat_mean_abund_per_phase_adj_covar) != 'PROK1',]))
+max_val <- max(abs(min(mat_mean_abund_per_phase_adj_covar[!row.names(mat_mean_abund_per_phase_adj_covar) %in% c('PROK1', 'CXCL13'),])), max(mat_mean_abund_per_phase_adj_covar[!row.names(mat_mean_abund_per_phase_adj_covar) %in% c('PROK1','CXCL13'),]))
 mat_mean_abund_per_phase_adj_covar[mat_mean_abund_per_phase_adj_covar > max_val] <- max_val
 breaksList = seq(-max_val, max_val, by = 0.01)
 if(!0 %in% breaksList) breaksList <- sort(c(breaksList, 0))
@@ -278,53 +253,18 @@ full_palette[ceiling(length(full_palette)/2)] <- "#FFFFFF"
 colorList <- colorRampPalette(full_palette)(length(breaksList))
 
 h3 <- pheatmap(mat_mean_abund_per_phase_adj_covar[h2$tree_row$labels[h2$tree_row$order],], fontsize_number = 12, cluster_cols = F, cluster_rows = F,
-         color = colorList, breaks = breaksList,cellwidth = 14, cellheight = 10,
-         gaps_row = c(1, 13,37))
+               color = colorList, breaks = breaksList,cellwidth = 14, cellheight = 10,
+               gaps_row = c(27, 29,38))
 
-pdf(paste0(out_basedir, "plots/limma_DEPs_heatmap_v2.pdf"), width = 6, height = 10)
-#grid::grid.newpage()
-#grid::grid.draw(h2$gtable)
-#grid::grid.newpage()
-#grid::grid.draw(h3$gtable)
 
+
+
+
+pdf(paste0(out_basedir, "plots/limma_DEPs_heatmap_v3.pdf"), width = 6, height = 10)
 combined <- arrangeGrob(h2$gtable, h3$gtable, ncol = 2, nrow = 1)
 grid::grid.draw(combined)
 dev.off()
 
-
-# 
-# 
-# # Line plot with means per phase
-# plot_list <- list()
-# cnt <- 1
-# max_val <- max(abs(min(mat_mean_abund_per_phase_adj_covar[row.names(mat_mean_abund_per_phase_adj_covar) != 'PROK1',])), max(mat_mean_abund_per_phase_adj_covar[row.names(mat_mean_abund_per_phase_adj_covar) != 'PROK1',]))
-# for (cl in c(4,2,3,1)){
-#   mean_subs <- mean_abund_per_phase_adj_covar_long[mean_abund_per_phase_adj_covar_long$Protein %in%  clusters[clusters$cluster == cl, "prot"],]
-#   if (cl != 4) {
-#     ylims <- c(-1 * max_val, max_val)
-#   } else {
-#     ylims <- c(min(mean_subs$mean_prot), max(mean_subs$mean_prot))
-#   }
-#   plot_list[[cnt]] <- ggplot(mean_subs, 
-#                             aes(x = phase, y = mean_prot, group = Protein)) + 
-#     geom_point(fill = "#1B4F72",    
-#                color = "#08306B",    
-#                shape = 21,
-#                size = 3,
-#                alpha = 0.3) +        
-#     geom_line(linewidth = 0.5, alpha = 0.5) + 
-#     ylim(ylims) +
-#     theme_minimal() +
-#     ylab("Mean adjusted abundance") +
-#     ggtitle(paste0("cluster ", cnt)) 
-#   cnt <- cnt + 1
-# }
-# pdf(paste0(out_basedir, "plots/limma_DEPs_mean_trajs.pdf"), width = 5, height = 15)
-# ((plot_list[[1]] / plot_list[[2]]) / (plot_list[[3]] / plot_list[[4]])) + plot_layout(heights = c(1, 1, 1, 1))
-# dev.off()
-# 
-# 
-# 
 
 ################################################################################
 # Proteins that change more than by 2 sds
@@ -342,67 +282,30 @@ prots_strong_changes <- d_wide %>%
 # Protein vs TP GAM and LMM
 ################################################################################
 
-gam_res_prot_tp <- data.frame(matrix(nrow = length(all_prots), ncol = 7))
-colnames(gam_res_prot_tp) <- c("prot", "gam_pval", "gam_edf", "gam_fval", "n", "n_samples", "lmm_pval")
-pb <- txtProgressBar(min = 0, max = length(all_prots), style = 3)
+b1_gam_prot_tp <- read.delim("results12/intensity_shared_prots_261125/prot_vs_tp_gam.txt", sep = "\t", as.is = T, check.names = F)
+b2_gam_prot_tp <- read.delim("results12/intensity_batch2_prots_261125//prot_vs_tp_gam.txt", sep = "\t", as.is = T, check.names = F)
 
-cnt <- 1
-for (prot in all_prots){
-  res_gam <- gam_prot_tp_adj_covar(d_wide, prot, covariates, scale = T, predict = F)
-  res_lmm <- lmm_prot_tp_poly3_adj_covar(d_wide, prot, covariates)
-  gam_res_prot_tp[cnt,] <- c(prot, unlist(res_gam), res_lmm)
-  cnt <- cnt + 1
-  setTxtProgressBar(pb, cnt)
-}
-close(pb)
-
-gam_res_prot_tp <- na.omit(gam_res_prot_tp) %>%
-  mutate(across(-c( prot), as.numeric)) 
-
-gam_res_prot_tp$gam_BH_pval <- p.adjust(gam_res_prot_tp$gam_pval, method = 'BH')
-gam_res_prot_tp$lmm_BH_pval <- p.adjust(gam_res_prot_tp$lmm_pval, method = 'BH')
-
-gam_res_prot_tp <- gam_res_prot_tp[order(gam_res_prot_tp$gam_pval),]
-gam_res_prot_tp$gam_edf_round <- round(gam_res_prot_tp$gam_edf)
-
-write.table(gam_res_prot_tp, file = paste0(out_basedir, "prot_vs_tp_gam.txt"), quote = F, sep = "\t", row.names = FALSE)
-gam_res_prot_tp <- read.delim(paste0(out_basedir, "prot_vs_tp_gam.txt"), sep = "\t", as.is = T, check.names = F)
-signif <- gam_res_prot_tp[gam_res_prot_tp$gam_BH_pval < 0.05,]
+gam_prot_tp <- rbind(b1_gam_prot_tp, b2_gam_prot_tp)
+gam_prot_tp$gam_BH_pval <- p.adjust(gam_prot_tp$gam_pval, method = 'BH')
+gam_prot_tp$lmm_BH_pval <- p.adjust(gam_prot_tp$lmm_pval, method = 'BH')
+signif <- gam_prot_tp[gam_prot_tp$gam_BH_pval < 0.05,]
 
 cat ("Number of proteins that change significantly with time:", nrow(signif), "\n")
 cat("Of them, the number of proteins with a non-linear change: ", nrow(signif[signif$gam_edf_round > 1,]), "\n")
 cat("Of them, the number of proteins showing a significant association with time also in LMMs:", nrow(signif[signif$lmm_BH_pval < 0.05,]))
 
-prot = 'PROK1'
-pdf(paste0(out_basedir, "plots/selected_prot_trajs.pdf"), width = 3, height = 3)
-plot_boxplot_with_traj(d_wide_adj_covar, 'PROK1')
-plot_boxplot_with_traj(d_wide_adj_covar, 'FABP4')
-plot_boxplot_with_traj(d_wide_adj_covar, 'REN')
-plot_boxplot_with_traj(d_wide_adj_covar, 'TNFSF10')
-dev.off()
+write.table(gam_prot_tp, file = paste0(out_basedir, "/prot_vs_tp_gam.txt"), quote = F, sep = "\t", row.names = F)
 
-# TNF
-p1 <- plot_traj_many_prots2(all_prots_traj, prots = c("FAS", "FASLG", "TNFSF10", "TNFSF11", "TNFSF12", "TNFRSF10C", "TNFRSF13B"),colored = T, phases = T)
-p2 <- plot_boxplot_with_traj(d_wide_adj_covar, 'FAS')
-p3 <- plot_boxplot_with_traj(d_wide_adj_covar, 'FASLG')
-p4 <- plot_boxplot_with_traj(d_wide_adj_covar, 'TNFSF10')
-p5 <- plot_boxplot_with_traj(d_wide_adj_covar, 'TNFSF11')
-p6 <- plot_boxplot_with_traj(d_wide_adj_covar, 'TNFSF12')
-p7 <- plot_boxplot_with_traj(d_wide_adj_covar, 'TNFRSF10C')
-p8 <- plot_boxplot_with_traj(d_wide_adj_covar, 'TNFRSF13B')
+all_sign_prots <- signif$prot
+aic_bic_cmp <- data.frame(matrix(nrow = length(all_sign_prots), ncol = 4))
+row.names(aic_bic_cmp) = all_sign_prots
+colnames(aic_bic_cmp) <- c("AIC1", "AIC2", "BIC1", "BIC2")
 
-pdf(paste0(out_basedir, "plots/TNF_plots.pdf"), width = 10, height = 10, useDingbats = F)
-design <- "
-  112
-  113
-  456
-  78#
-"
-p1+p2+p3+p4+p5+p6+p7+p8 + plot_layout(design = design)
-dev.off()
-
-
-
+for (prot in all_sign_prots) {
+  cmp_res <- compare_gam_lmm(d_wide, prot, covariates)
+  aic_bic_cmp[prot,] <-unlist(cmp_res)[c("AIC1", "AIC2", "BIC1", "BIC2")]
+}
+write.table(aic_bic_cmp, file = paste0(out_basedir, "/GAM_vs_LMM_AIC_BIC.txt"), quote = F, sep = "\t", row.names = F)
 
 ####################NULL################################################################################
 # Cluster longitudinal trajectories: GAM
@@ -411,7 +314,7 @@ dev.off()
 n_points = 100
 
 # Take only significant non-linear trajectories:
-all_sign_prots <- signif[signif$gam_edf_round > 1, "prot"]
+all_sign_prots <- signif$prot
 
 prot_trajs <- data.frame(matrix(nrow = length(all_sign_prots) , ncol = n_points))
 row.names(prot_trajs) <- all_sign_prots
@@ -430,24 +333,6 @@ close(pb)
 
 write.table(prot_trajs, file = paste0(out_basedir, "trajectories_gam/protein_trajectories_gam_", length(all_sign_prots), "_prots.txt"), quote = F, sep = "\t", col.names = NA, row.names = T)
 
-# Take only significant linear trajectories:
-all_sign_prots <- signif[signif$gam_edf_round == 1, "prot"]
-
-prot_trajs <- data.frame(matrix(nrow = length(all_sign_prots) , ncol = n_points))
-row.names(prot_trajs) <- all_sign_prots
-colnames(prot_trajs) <- seq(1,4, length.out = n_points)
-
-# Precompute all GAM fits once
-pb <- txtProgressBar(min = 0, max = length(all_sign_prots), style = 3)
-cnt <- 1
-for (prot in all_sign_prots) {
-  gam_fit <- gam_prot_tp_adj_covar(d_wide, prot, covariates, scale = T, predict = T, n_points = n_points)
-  prot_trajs[prot,] <- gam_fit$predicted
-  cnt <- cnt + 1
-  setTxtProgressBar(pb, cnt)
-}
-close(pb)
-write.table(prot_trajs, file = paste0(out_basedir, "trajectories_gam/protein_trajectories_gam_", length(all_sign_prots), "_linear_prots.txt"), quote = F, sep = "\t", col.names = NA, row.names = T)
 
 
 source("/Users/Dasha/work/Sardinia/W4H/olink/scripts/clustering of trajectories.R")
@@ -504,7 +389,7 @@ for (ph in c(all_hormones, all_phenos)){
   
   p_str = paste0("P = ", formatC(res_gam$pval, digits = 3))
   if(res_gam$pval == 0) {
-    title_str <- bquote(.(ph_name)~";"~P < 2.2 %*% 10^16)
+    title_str <- bquote(.(ph_name)~";"~P < 2.2 %*% 10^-16)
   } else if(res_gam$pval < 0.001) {
     sci_val <- formatC(res_gam$pval, format = "e", digits = 2)
     coeff <- as.numeric(strsplit(sci_val, "e")[[1]][1])
@@ -551,33 +436,6 @@ gam_res_pheno_tp$gam_BH_sign <- ifelse(gam_res_pheno_tp$gam_BH_pval < 0.05,T,F)
 write.table(gam_res_pheno_tp, file = paste0(out_basedir, "pheno_vs_tp_gam.txt"), quote = F, sep = "\t", row.names = FALSE)
 write.table(pheno_trajs, file = paste0(out_basedir, "pheno_traj_gam.txt"), quote = F, sep = "\t", col.names = NA, row.names = T)
 
-################################################################################
-# Protein vs phenotype  lm per phase
-################################################################################
-
-lm_per_tp <- data.frame(matrix(nrow = length(all_prots) * length(all_hormones) * length(all_phases), ncol = 5))
-colnames(lm_per_tp) <- c("pheno", "prot", "phase", "estimate", "pval")
-
-results_list <- vector("list", length(all_hormones) * length(all_prots))
-idx <- 1
-
-for (ph in all_hormones) {
-  for (prot in all_prots){
-    results_list[[idx]] <- lm_per_tp_pheno_prot_adj_covar(d_wide, pheno, prot, ph, covariates, scale = T)
-    idx <- idx + 1
-  }
-}
-
-lm_per_tp <- do.call(rbind, results_list)
-
-lm_per_tp <- na.omit(lm_per_tp) %>%
-  mutate(across(-c(pheno, prot, phase), as.numeric)) %>%
-  group_by(phase) %>%
-  mutate(BH_pval <- p.adjust(pval, method = 'BH')) %>%
-  ungroup()
-  
-lm_per_tp <- lm_per_tp[order(lm_per_tp$pval),]
-write.table(lm_per_tp, file = paste0(out_basedir, "prot_vs_pheno_per_tp.txt"), quote = F, sep = "\t", col.names = NA, row.names = T)
 
 ################################################################################
 # GAM protein vs phenotype 
@@ -616,8 +474,11 @@ cat(nrow(gam_res[gam_res$BH_pval < 0.05,]), "\n")
 
 write.table(gam_res, file = paste0(out_basedir, "prot_vs_allpheno_spline_gam.shared_prots.txt"), quote = F, sep = "\t", row.names = FALSE)
 
-gam_res <- read.delim(paste0(out_basedir,"prot_vs_allpheno_spline_gam.shared_prots.txt"), as.is = T, check.names = F, sep = "\t")
-colnames(gam_res) <- c("prot", "pheno", "pval", "estimate", "SE", "n", "n_samples", "lmm_pval")
+b1_res <- read.delim("results12/intensity_shared_prots_261125/prot_vs_allpheno_spline_gam.shared_prots.txt", as.is = T, check.names = F, sep = "\t")
+colnames(b1_res) <- c("prot", "pheno", "pval", "estimate", "SE", "n", "n_samples", "lmm_pval")
+b2_res <- read.delim("results12/intensity_batch2_prots_261125/prot_vs_allpheno_spline_gam.batch2_prots.txt", as.is = T, check.names = F, sep = "\t")
+
+gam_res <- rbind(b1_res, b2_res)
 
 gam_res <- gam_res[!gam_res$pheno %in% c("TSH", "FT4", "TST"),]
 
@@ -625,7 +486,7 @@ gam_res <- gam_res %>%
   na.omit(gam_res) %>%
   mutate(across(-c(pheno, prot), as.numeric)) %>% 
   arrange(pval) 
-  
+
 gam_res_hormones <- gam_res[gam_res$pheno %in% all_hormones,] %>%
   mutate(BH_pval = p.adjust(pval, method = 'BH')) %>%
   mutate(BH_lmm_pval = p.adjust(lmm_pval, method = 'BH')) %>%
@@ -641,17 +502,21 @@ gam_res_phenos <- gam_res[gam_res$pheno %in% all_phenos,] %>%
 nrow(gam_res_hormones[gam_res_hormones$BH_pval < 0.05,])
 nrow(gam_res_phenos[gam_res_phenos$BH_pval < 0.05,])
 
+gam_res_hormones$pheno <- gsub("PROG", "P4", gam_res_hormones$pheno)
+gam_res_hormones$pheno <- gsub("17BES", "E2", gam_res_hormones$pheno)
 
-write.table(gam_res_hormones, file = paste0(out_basedir, "prot_vs_hormones.gam.spline.shared_prots.txt"), quote = F, sep = "\t", row.names = FALSE)
-write.table(gam_res_phenos, file = paste0(out_basedir, "prot_vs_phenotypes.gam.spline.shared_prots.txt"), quote = F, sep = "\t", row.names = FALSE)
+write.table(gam_res_hormones, file = paste0(out_basedir, "prot_vs_hormones.gam.spline.all_prots.txt"), quote = F, sep = "\t", row.names = FALSE)
+write.table(gam_res_phenos, file = paste0(out_basedir, "prot_vs_phenotypes.gam.spline.all_prots.txt"), quote = F, sep = "\t", row.names = FALSE)
 
 
 ### Heatmaps
+gam_res_hormones <- read.delim(paste0(out_basedir, "prot_vs_hormones.gam.spline.all_prots.txt"), sep = "\t", as.is = T, check.names = F)
+gam_res_phenos <- read.delim(paste0(out_basedir, "prot_vs_phenotypes.gam.spline.all_prots.txt"), sep = "\t", as.is = T, check.names = F)
 
 # signif in at least 1 hormone
 prot_subs <- gam_res_hormones[gam_res_hormones$BH_pval < 0.05, "prot"]
-h <- plot_association_heatmap(gam_res_hormones, prot_subs, transpose = T, cluster_cols = F)
-pdf(paste0(out_basedir, "plots/prot_vs_hormones.gam.spline.BH0.05.transposed.pdf"), width = 4, height = 10, useDingbats = F)
+h <- plot_association_heatmap(gam_res_hormones, prot_subs, transpose = T, cluster_cols = F, fontsize = 6)
+pdf(paste0(out_basedir, "plots/prot_vs_hormones.gam.spline.BH0.05.transposed_2.pdf"), width = 3, height = 15, useDingbats = F)
 grid::grid.newpage()
 grid::grid.draw(h$gtable)
 dev.off()
@@ -660,14 +525,15 @@ dev.off()
 prot_subs2 <- with(gam_res_hormones[gam_res_hormones$BH_pval < 0.05, ], 
                    names(which(table(prot) >= 2)))
 h <- plot_association_heatmap(gam_res_hormones, prot_subs2, transpose = T, cluster_cols = F)
-pdf(paste0(out_basedir, "plots/prot_vs_hormones.gam.spline.BH0.05.transposed.min2horm.pdf"), width = 4, height = 5, useDingbats = F)
+pdf(paste0(out_basedir, "plots/prot_vs_hormones.gam.spline.BH0.05.transposed.min2horm_2.pdf"), width = 4, height = 5, useDingbats = F)
 grid::grid.newpage()
 grid::grid.draw(h$gtable)
 dev.off()
 
 # volcano
-pdf(paste0(out_basedir, "plots/prot_vs_hormones.gam.spline.volcano.pdf"), width = 8, height = 6, useDingbats = F)
-plot_association_volcano(gam_res_hormones)
+pdf(paste0(out_basedir, "plots/prot_vs_hormones.gam.spline.volcano_no_PRL.pdf"), width = 7, height = 10, useDingbats = F)
+gam_res_hormones_no_PRL <- gam_res_hormones[!(gam_res_hormones$prot == "PRL" & gam_res_hormones$pheno == 'PRL'), ]
+plot_association_volcano(gam_res_hormones_no_PRL)
 dev.off()
 
 ### Phenotypes
@@ -677,8 +543,8 @@ prot_subs <- gam_res_phenos[gam_res_phenos$BH_pval < 0.05, "prot"]
 col_order <- c("ALT", "AST", "TRI", "HDL", "COL", "LDL", "INS", "HOMA_B", "HOMA_IR", "GL")
 gam_res_phenos$pheno <- factor(gam_res_phenos$pheno, levels = col_order)
 h <- plot_association_heatmap(gam_res_phenos, prot_subs, transpose = T, 
-                              cluster_cols = F, col_order = col_order)
-pdf(paste0(out_basedir, "plots/prot_vs_phenos.gam.spline.BH0.05.transposed.pdf"), width = 6, height = 10, useDingbats = F)
+                              cluster_cols = F, col_order = col_order, fontsize = 5)
+pdf(paste0(out_basedir, "plots/prot_vs_phenos.gam.spline.BH0.05.transposed_2.pdf"), width = 6, height = 14, useDingbats = F)
 grid::grid.newpage()
 grid::grid.draw(h$gtable)
 dev.off()
@@ -689,8 +555,8 @@ prot_subs2 <- with(gam_res_phenos[gam_res_phenos$BH_pval < 0.05, ],
 col_order <- c("ALT", "AST", "TRI", "HDL", "COL", "LDL", "INS", "HOMA_B", "HOMA_IR", "GL")
 gam_res_phenos$pheno <- factor(gam_res_phenos$pheno, levels = col_order)
 h <- plot_association_heatmap(gam_res_phenos, prot_subs, transpose = T, 
-                              cluster_cols = F, col_order = col_order)
-pdf(paste0(out_basedir, "plots/prot_vs_phenos.gam.spline.BH0.05.transposed.min2pheno.pdf"), width = 6, height = 10, useDingbats = F)
+                              cluster_cols = F, col_order = col_order, fontsize = 6)
+pdf(paste0(out_basedir, "plots/prot_vs_phenos.gam.spline.BH0.05.transposed.min2pheno_2.pdf"), width = 6, height = 12, useDingbats = F)
 grid::grid.newpage()
 grid::grid.draw(h$gtable)
 dev.off()
@@ -712,6 +578,7 @@ dev.off()
 
 
 # Upset
+library(UpSetR)
 upset_matrix <- gam_res_hormones %>%
   filter(BH_pval < 0.05) %>%
   dplyr::select(prot, pheno) %>%
@@ -725,7 +592,8 @@ upset_matrix <- gam_res_hormones %>%
   ) %>%
   tibble::column_to_rownames("prot")
 
-pdf(paste0(out_basedir, "plots/hormone_assoc_upset.pdf"), width = 6, height = 4, useDingbats = F)
+colnames(upset_matrix) <- rename_p4_e2(colnames(upset_matrix))
+pdf(paste0(out_basedir, "plots/hormone_assoc_upset.pdf"), width = 6, height = 4, useDingbats = F,onefile = FALSE)
 # Create plot
 upset(upset_matrix,
       nsets = ncol(upset_matrix),
@@ -733,6 +601,7 @@ upset(upset_matrix,
       order.by = "freq",
       mainbar.y.label = "Number of Proteins",
       sets.x.label = "Proteins per Hormone")
+
 
 dev.off()
 
@@ -842,78 +711,76 @@ prs[grepl("^[0-9]",prs$IID), "IID"] <- paste0("X", prs[grepl("^[0-9]",prs$IID), 
 
 prs <- prs[, colSums(is.na(prs)) <= 100]
 
-gam_res_prs <- data.frame(matrix(nrow = length(all_prots) * length(all_phenos_combined), ncol = 7))
+all_prots_prs <- intersect(all_prots, colnames(prs))
+tasks <- expand.grid(prot = all_prots_prs, ph = all_phenos, stringsAsFactors = FALSE)
+
+# 2. Setup parallel backend (use most available cores)
+plan(multisession, workers = parallel::detectCores() - 1)
+
+# 3. run calculations in parallel
+results_list <- future_lapply(1:nrow(tasks), function(idx) {
+  prot <- tasks$prot[idx]
+  ph <- tasks$ph[idx]
+  cov_prs <- left_join(covariates, prs[,c("IID", prot)], by = c("ID" = "IID"))
+  colnames(cov_prs)[ncol(cov_prs)] <- "PRS"
+  res_gam <- gam_prot_pheno_adj_covar(d_wide, pheno, prot, ph, cov_prs, 
+                                      scale = T, adjust_timepoint = 'spline', 
+                                      anova_pval = F, longitudinal = T)
+  
+  return(c(prot = prot, pheno = ph, unlist(res_gam))) 
+}, future.seed = TRUE) # Important for reproducibility/random processes in GAMs
+
+# 4. Combine results
+gam_res_prs <- as.data.frame(do.call(rbind, results_list))
 colnames(gam_res_prs) <- c("prot", "pheno", "pval", "estimate", "SE", "n", "n_samples")
 
-cnt <- 1
-for (ph in all_phenos_combined) {
-  cat(ph, "\n")
-  
-  pb <- txtProgressBar(min = 1, max = length(all_prots), style = 3)
-  i = 1
-  for (prot in all_prots){
-    if (prot %in% colnames(prs)){
-      cov_prs <- left_join(covariates, prs[,c("IID", prot)], by = c("ID" = "IID"))
-      colnames(cov_prs)[ncol(cov_prs)] <- "PRS"
-      res_gam <- gam_prot_pheno_adj_covar(d_wide, pheno, prot, ph, cov_prs, scale = T, adjust_timepoint = 'spline')
-      
-      gam_res_prs[cnt,] <- c(prot, ph, unlist(res_gam))
-    } else {
-      gam_res_prs[cnt,] <- c(prot, ph, rep(NA,5))
-    }
-    cnt <- cnt + 1
-    i <- i + 1
-    setTxtProgressBar(pb, i)
-  }
-  close(pb)
-}
-
+# 5. Clean up
 gam_res_prs <- gam_res_prs %>%
-  na.omit(gam_res_prs) %>%
-  mutate(across(-c(pheno, prot), as.numeric)) %>% 
-  arrange(pval)
+  mutate(across(c(pval, estimate, SE, n, n_samples), as.numeric)) %>% 
+  na.omit() %>%
+  arrange(pval) %>%
+  mutate(BH_pval = p.adjust(pval, method = 'BH'))
 
-write.table(gam_res_prs, file = paste0(out_basedir, "prot_vs_allpheno_spline_gam.shared_prots.PRS.txt"), quote = F, sep = "\t", row.names = FALSE)
+write.table(gam_res_prs, file = paste0(out_basedir, "prot_vs_phenotypes.gam.spline.all_prots.PRS.txt"), 
+            quote = F, sep = "\t", row.names = FALSE)
 
-gam_res_prs = read.delim(paste0(out_basedir, "prot_vs_allpheno_spline_gam.shared_prots.PRS.txt"), sep = "\t", as.is = T, check.names = F)
-gam_res = read.delim(paste0(out_basedir, "prot_vs_allpheno_spline_gam.shared_prots.txt"), sep = "\t", as.is = T, check.names = F)
-colnames(gam_res) <- c("prot", "pheno", "pval", "estimate", "SE", "n", "n_samples", "lmm_pval")
-gam_res <- gam_res %>%
-  na.omit(gam_res) %>%
-  mutate(across(-c(pheno, prot), as.numeric)) %>% 
-  arrange(pval) 
 
-cmp <- left_join(gam_res[,c("prot", "pheno", "pval", "estimate", "n_samples")], gam_res_prs[,c("prot", "pheno", "pval", "estimate", "n_samples")], by = c("pheno", "prot"))
 
-cmp_hormones <- cmp[cmp$pheno %in% all_hormones,]
-cmp_pheno <- cmp[cmp$pheno %in% all_phenos,]
+gam_res_prs = read.delim(paste0(out_basedir, "prot_vs_hormones.gam.spline.all_prots.PRS.txt"), sep = "\t", as.is = T, check.names = F)
+gam_res_prs_ph = read.delim(paste0(out_basedir, "prot_vs_phenotypes.gam.spline.all_prots.PRS.txt"), sep = "\t", as.is = T, check.names = F)
+
+gam_res_hormones <- read.delim(paste0(out_basedir, "prot_vs_hormones.gam.spline.all_prots.txt"), sep = "\t", as.is = T, check.names = F)
+gam_res_phenos <- read.delim(paste0(out_basedir, "prot_vs_phenotypes.gam.spline.all_prots.txt"), sep = "\t", as.is = T, check.names = F)
+
+cmp_hormones <- inner_join(gam_res_hormones[,c("prot", "pheno", "pval", "estimate", "n_samples")], gam_res_prs[,c("prot", "pheno", "pval", "estimate", "n_samples")], by = c("pheno", "prot"))
+cmp_pheno <- inner_join(gam_res_phenos[,c("prot", "pheno", "pval", "estimate", "n_samples")], gam_res_prs_ph[,c("prot", "pheno", "pval", "estimate", "n_samples")], by = c("pheno", "prot"))
 
 formatC(cor(cmp_hormones$estimate.x, cmp_hormones$estimate.y, use = 'complete.obs'), digits = 2)
 formatC(cor(cmp_pheno$estimate.x, cmp_pheno$estimate.y, use = 'complete.obs'), digits = 2)
 
 
-p1 <- ggplot(cmp[cmp$pheno %in% all_hormones,], aes(estimate.x, estimate.y)) + 
+p1 <- ggplot(cmp_hormones, aes(estimate.x, estimate.y)) + 
   geom_point(alpha = 0.3) + 
   geom_smooth(method = 'lm', color = 'dodgerblue4', size = 0.5) +
   xlab("no correction for PRS") + ylab ("with correction for PRS") + 
   ggtitle("Hormone - protein associations\ncomparison of estimates") + 
   theme_minimal()
 
-p2 <- ggplot(cmp[cmp$pheno %in% all_hormones,], aes(-log10(pval.x), -log10(pval.y) )) + 
+p2 <- ggplot(cmp_hormones, aes(-log10(pval.x), -log10(pval.y) )) + 
   geom_point(alpha = 0.3) + 
   geom_smooth(method = 'lm', color = 'dodgerblue4', size = 0.5) +
   xlab("no correction for PRS") + ylab ("with correction for PRS") + 
   ggtitle("Hormone - protein associations\ncomparison of -log10(P)") +
   theme_minimal()
 
-p3 <- ggplot(cmp[cmp$pheno %in% all_phenos,], aes(estimate.x, estimate.y)) + 
+p3 <- ggplot(cmp_pheno, aes(estimate.x, estimate.y)) + 
   geom_point(alpha = 0.3) + 
   geom_smooth(method = 'lm', color = 'dodgerblue4', size = 0.5) +
   xlab("no correction for PRS") + ylab ("with correction for PRS") + 
   ggtitle("Phenotype - protein associations\ncomparison of estimates") + 
   theme_minimal()
 
-p4 <- ggplot(cmp[cmp$pheno %in% all_phenos,], aes(-log10(pval.x), -log10(pval.y) )) + 
+p4 <- ggplot(cmp_pheno, aes(-log10(pval.x), -log10(pval.y) )) + 
   geom_point(alpha = 0.3) + 
   geom_smooth(method = 'lm', color = 'dodgerblue4', size = 0.5) +
   xlab("no correction for PRS") + ylab ("with correction for PRS") + 
@@ -924,6 +791,13 @@ pdf(paste0(out_basedir, "plots/PRS_comparison_associations.pdf"), height = 8, wi
 (p1 + p2) / (p3 + p4) + plot_annotation(tag_levels = 'a') & 
   theme(plot.tag = element_text(size = 14, face="bold"))
 dev.off()
+
+write.table(cmp_hormones, file = paste0(out_basedir, "prot_vs_hormones.gam.spline.all_prots.CMP.PRS.txt"), 
+            quote = F, sep = "\t", row.names = FALSE)
+write.table(cmp_pheno, file = paste0(out_basedir, "prot_vs_phenotypes.gam.spline.all_prots.CMP.PRS.txt"), 
+            quote = F, sep = "\t", row.names = FALSE)
+
+
 ################################################################################
 # GAM hormones vs proteins non linear
 ################################################################################
@@ -974,28 +848,61 @@ nrow(cmp_h[cmp_h$BH_pval.x > 0.05 & cmp_h$BH_pval.y < 0.05,])
 ################################################################################
 
 
-gam_res_hormones <- read.delim(paste0(out_basedir, "prot_vs_hormones.gam.spline.shared_prots.txt"), as.is = T, sep = "\t", check.names  = FALSE)
-gam_res_phenos<- read.delim(paste0(out_basedir, "prot_vs_phenotypes.gam.spline.shared_prots.txt"), as.is = T, sep = "\t", check.names  = FALSE)
+gam_res_hormones <- read.delim(paste0(out_basedir, "prot_vs_hormones.gam.spline.all_prots.txt"), as.is = T, sep = "\t", check.names  = FALSE)
+gam_res_phenos<- read.delim(paste0(out_basedir, "prot_vs_phenotypes.gam.spline.all_prots.txt"), as.is = T, sep = "\t", check.names  = FALSE)
 gam_res_hormones_pheno <- read.delim(paste0(out_basedir, "all_pheno_vs_all_pheno_spline_gam.shared_prots.txt"), as.is = T, sep = "\t", check.names  = FALSE)
 gam_res_hormones_pheno <- gam_res_hormones_pheno[gam_res_hormones_pheno$prot != gam_res_hormones_pheno$pheno,]
 #colnames(gam_res_hormones_pheno)[c(1,2)] <-c("prot", "pheno")
 
-causal_links <- read.delim(paste0(out_basedir, "causality/causal_links.v2.txt"), as.is = T, sep = "\t", check.names  = FALSE)
+gam_res_hormones$prot <- gsub("PRL", "PRL_olink", gam_res_hormones$prot)
+gam_res_phenos$prot <- gsub("PRL", "PRL_olink", gam_res_phenos$prot)  
+
+causal_1 <- read.delim(paste0(out_basedir, "causality/hormone_vs_phenotypes.causality_wide.linear.txt"), as.is = T, sep = "\t", check.names  = FALSE)
+causal_2 <- read.delim(paste0(out_basedir, "causality/prot_vs_hormones.causality_wide.linear.txt"), as.is = T, sep = "\t", check.names  = FALSE)
+causal_3 <- read.delim(paste0(out_basedir, "causality/prot_vs_phenotypes.causality_wide.linear.txt"), as.is = T, sep = "\t", check.names  = FALSE)
+
+# rm hormone - pheno pairs whose association is not nominally significant:
+sign_pairs <- c(
+  paste(gam_res_hormones_pheno[gam_res_hormones_pheno$pval < 0.05, ]$prot, gam_res_hormones_pheno[gam_res_hormones_pheno$pval < 0.05, ]$pheno, sep = "_"),
+  paste(gam_res_hormones_pheno[gam_res_hormones_pheno$pval < 0.05, ]$pheno, gam_res_hormones_pheno[gam_res_hormones_pheno$pval < 0.05, ]$prot, sep = "_")
+)
+causal_1 <- causal_1[paste(causal_1$phenotype, causal_1$protein, sep = "_") %in% sign_pairs,]
+
+causal <- rbind(causal_1, causal_2, causal_3)
+
+causal_links <- causal[,1:3] %>%
+  separate_rows(summary, sep = ";") %>%               # one row per timepoint
+  mutate(summary = str_remove(summary, "^\\d+:")) %>% # remove "1:", "2:", etc.
+  filter(summary != "nothing significant") %>%        # drop empty timepoints
+  rowwise() %>%
+  mutate(
+    pairs = if (summary == "both directions significant") {
+      list(c(paste(phenotype, protein, sep = " → "),
+             paste(protein, phenotype, sep = " → ")))
+    } else {
+      list(summary)
+    }
+  ) %>%
+  unnest(pairs) %>%
+  separate(pairs, into = c("cause", "consequence"), sep = " → ") %>%
+  select(cause, consequence) %>%
+  unique()
+
+write.table(causal_links, file = paste0(out_basedir, "causality/causal_links.v2.txt"), quote = F, sep = "\t", row.names = F)
+
 
 #
 network_data <- rbind(gam_res_hormones[gam_res_hormones$BH_pval < 0.05, c("prot", "pheno", "estimate")],
                       gam_res_phenos[gam_res_phenos$BH_pval < 0.05, c("prot", "pheno", "estimate")],
-                      gam_res_hormones_pheno[gam_res_hormones_pheno$BH_pval < 0.05, c("prot", "pheno", "estimate")])
+                      gam_res_hormones_pheno[gam_res_hormones_pheno$pval < 0.05 , c("prot", "pheno", "estimate")])
 
-#network_data <- rbind(gam_res_hormones[gam_res_hormones$BH_pval < 0.05, c("prot", "pheno", "estimate")],
-#                      gam_res_phenos[gam_res_phenos$BH_pval < 0.05, c("prot", "pheno", "estimate")])
+# add hormone-pheno links that do not have a significant association, but do have a significant causal link
+additional_hormones_pheno <- rbind(
+  inner_join(gam_res_hormones_pheno[c("prot", "pheno", "estimate")], causal_links, by = c("prot" = "cause", "pheno" = "consequence")),
+  inner_join(gam_res_hormones_pheno[c("prot", "pheno", "estimate")], causal_links, by = c("prot" = "consequence", "pheno" = "cause")))
 
-#network_data <- network_data[abs(network_data$estimate) > 0.15,]
+network_data <- rbind(network_data, additional_hormones_pheno)
 
-# only take proteins that have at least 2 phenotypes/hormones associated
-#prot_counts <- table(c(network_data$prot, network_data$pheno))
-#prot_sel <- names(prot_counts[prot_counts > 1])
-#network_data <- network_data[network_data$prot %in% prot_sel,]
 
 causal_forward <- paste(causal_links$cause, causal_links$consequence)
 
@@ -1008,7 +915,7 @@ network_data_swapped <- network_data %>%
     # Determine if this edge has a defined direction
     has_direction = is_forward | is_reverse,
     
-    # KEY STEP: Determine how many rows we need.
+    # Determine how many rows we need.
     # If it is bi-directional (both forward and reverse exist), we need 2 rows.
     # Otherwise, we keep 1 row.
     n_rows = ifelse(is_forward & is_reverse, 2, 1)
@@ -1027,15 +934,19 @@ network_data_swapped <- network_data %>%
     pheno_new = ifelse(should_swap, prot, pheno)
   ) %>%
   # Select and rename final columns
-  select(prot = prot_new, pheno = pheno_new, estimate, has_direction) %>%
-  # Optional: Ensure no exact duplicates if your original data had overlaps
+  dplyr::select(prot = prot_new, pheno = pheno_new, estimate, has_direction) %>%
+  # Ensure no exact duplicates 
   distinct()
 
 
 nodes_data <- unique(rbind(data.frame(feature = gam_res_hormones[gam_res_hormones$BH_pval < 0.05,"prot"], type = "protein"),
-                    data.frame(feature = gam_res_hormones[gam_res_hormones$BH_pval < 0.05,"pheno"], type = "hormone"),
-                    data.frame(feature = gam_res_phenos[gam_res_phenos$BH_pval < 0.05,"prot"], type = "protein"),
-                    data.frame(feature = gam_res_phenos[gam_res_phenos$BH_pval < 0.05,"pheno"], type = "phenotype")))
+                           data.frame(feature = gam_res_hormones[gam_res_hormones$BH_pval < 0.05,"pheno"], type = "hormone"),
+                           data.frame(feature = gam_res_phenos[gam_res_phenos$BH_pval < 0.05,"prot"], type = "protein"),
+                           data.frame(feature = gam_res_phenos[gam_res_phenos$BH_pval < 0.05,"pheno"], type = "phenotype")))
+
+nodes_data$feature <- rename_p4_e2(nodes_data$feature)
+network_data_swapped$prot <- rename_p4_e2(network_data_swapped$prot)
+network_data_swapped$pheno <- rename_p4_e2(network_data_swapped$pheno)
 
 
 write.table(network_data_swapped, file = paste0(out_basedir, "network/network.spline.edges.causality2.with_pheno-pheno.txt"), quote = F, sep = "\t", row.names = FALSE)

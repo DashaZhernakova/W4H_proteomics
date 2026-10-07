@@ -3,10 +3,12 @@ library(dplyr)
 library(readr)
 
 
-setwd("/Users/Dasha/work/Sardinia/W4H/olink/batch12/results12/intensity_shared_prots_261125/network")
-edges_data <- read.delim("network.spline.edges.causality2.with_pheno-pheno.txt", sep = "\t", check.names = F, as.is = T)  
-nodes_data <- read.delim("network.spline.nodes.txt", sep = "\t", check.names = F, as.is = T) 
-annot <- read.delim("Su_MR.subset_cut.txt", sep = "\t", check.names = F, as.is = T)
+setwd("/Users/Dasha/work/Sardinia/W4H/olink/batch12")
+
+out_basedir <- "results12/intensity_all_prots_220526/"
+edges_data <- read.delim(paste0(out_basedir, "/network/network.spline.edges.causality2.with_pheno-pheno.txt"), sep = "\t", check.names = F, as.is = T)  
+nodes_data <- read.delim(paste0(out_basedir, "/network/network.spline.nodes.txt"), sep = "\t", check.names = F, as.is = T) 
+annot <- read.delim(paste0(out_basedir,"/network/Su_MR.subset_cut.txt"), sep = "\t", check.names = F, as.is = T)
 
 # A. Process edges
 edges_processed <- edges_data %>%
@@ -133,7 +135,10 @@ prots_h <- c(edges_with_types[edges_with_types$type_from == 'protein' & edges_wi
 prots_ph <- c(edges_with_types[edges_with_types$type_from == 'protein' & edges_with_types$type_to != 'hormone', "from"], edges_with_types[edges_with_types$type_to == 'protein' & edges_with_types$type_from != 'hormone', "to"])
 shared_prots <- intersect(prots_h, prots_ph)
 
-edges_prep <- edges_prep[edges_prep$from %in% shared_prots | edges_prep$to %in% shared_prots,]
+all_hormones_phenos <- nodes_data[nodes_data$type %in% c("hormone", "phenotype"), ]$feature
+
+edges_prep <- edges_prep[edges_prep$from %in% shared_prots | edges_prep$to %in% shared_prots | 
+                           (edges_prep$to %in% all_hormones_phenos & edges_prep$from %in% all_hormones_phenos),]
 nodes_prep <- nodes_prep[nodes_prep$feature %in% edges_prep$to | nodes_prep$feature %in% edges_prep$from,]
 
 edges_prep[,c("prot", "pheno", "estimate", "strong_assoc", "has_direction")] <- NULL
@@ -169,6 +174,6 @@ if (nrow(annot_filtered) > 0) {
 }
 
 
-write.table(nodes_prep, file = "nodes_shared.txt", quote = F, sep = "\t", row.names = F)
-write.table(unique(edges_prep), file = "edges_shared.txt", quote = F, sep = "\t", row.names = F)
+write.table(nodes_prep, file = paste0(out_basedir, "/network/nodes_shared.txt"), quote = F, sep = "\t", row.names = F)
+write.table(unique(edges_prep), file = paste0(out_basedir, "/network/edges_shared.txt"), quote = F, sep = "\t", row.names = F)
 

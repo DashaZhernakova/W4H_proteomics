@@ -1,13 +1,13 @@
 
 
-setwd("/Users/Dasha/work/Sardinia/W4H/olink/batch12/")
+setwd("/Users/Dasha/work/Sardinia/W4H/olink/all_batches//")
 
-fname = "data/olink_batch12.intensity.bridged_all_proteins_lod150_wide_rm_outliers_4sd.txt"
+fname = "data/olink_all_batches.lod150_wide_rm_outliers_4sd.adj_all_covars.txt.gz"
 fname = "../../phenotypes/batch12/cleaned_phenotypes_251125_uniformed_adjusted.withHOMA.log_some.txt"
-fname = "results12/covariates_olink_batch12.txt"
+fname = "results/covariates_olink_all_batches.txt"
 fname = "all_mags_mapping.estrobolome_genes.counts.t.rpkm"
 
-phases <- read.delim("../../phenotypes/batch12/phases_251125.csv", as.is = T, check.names = F, sep = ",")
+phases <- read.delim("../../phenotypes/all_batches/phases_250526.csv", as.is = T, check.names = F, sep = ",")
 
 phases <- unique(phases) %>%
   mutate(
@@ -25,7 +25,7 @@ phases <- unique(phases) %>%
 
 d <- read.delim(fname, as.is = T, check.names = F, sep = "\t")
 if ("Code" %in% colnames(d)) colnames(d) <- gsub("Code", "SampleID", colnames(d))
-d[grepl("^[0-9]",d$SampleID), "SampleID"] <- paste0("X", d[grepl("^[0-9]",d$SampleID), "SampleID"])
+#d[grepl("^[0-9]",d$SampleID), "SampleID"] <- paste0("X", d[grepl("^[0-9]",d$SampleID), "SampleID"])
 
 
 nrow(d)
@@ -50,14 +50,16 @@ d_avg <- d_phases %>%
   group_by(SampleID_new) %>%
   summarise(
     across(where(is.numeric), ~ mean(., na.rm = TRUE)),  # Average numeric columns
-    batch = ifelse(any(batch == "batch2"), "batch2", first(batch)),  # Prefer batch2 if exists
-    from = first(from),  # Take first from value (or use similar logic as batch if needed)
-    .groups = 'drop'
+    # First value for all non-numeric columns except batch
+    across(!where(is.numeric) & !all_of("batch"), ~ first(.x[!is.na(.x)], default = NA)),
+    # Special handling for batch
+    batch = ifelse(any(batch == "batch2"), "batch2", first(batch) ),
+    .groups = "drop"
   )
 }
 colnames(d_avg)[1] <- "SampleID"
 length(unique(gsub("_.*","",(d_avg$SampleID))))
 colnames(d_avg) <- gsub("^BES$", "17BES", colnames(d_avg))
 d_avg$TP <- NULL
-write.table(d_avg, file = paste0(gsub(".txt$","", fname), ".phase_avg.txt"), quote = F, sep = "\t", row.names = FALSE)
+write.table(d_avg, file = paste0(gsub("\\.txt(\\.gz)?$","", fname), ".phase_avg.txt"), quote = F, sep = "\t", row.names = FALSE)
 

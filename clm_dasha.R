@@ -84,6 +84,11 @@ run_wide_models <- function(d_wide, pheno, covariates, pair){
   subs$pheno <- scale(subs$pheno)
   subs$prot <- scale(subs$prot)
   
+  covariate_names = colnames(covariates)[! colnames(covariates) %in% c("SampleID", "ID", "TP", "phase")]
+  if ("batch" %in% colnames(subs)){
+    if (table(na.omit(subs)$batch)["batch1"] == 0) covariate_names = covariate_names[covariate_names != "batch"]
+  }
+  
   wide_data <- reshape(
     subs,
     timevar = "phase",
@@ -93,10 +98,10 @@ run_wide_models <- function(d_wide, pheno, covariates, pair){
   wide_data$ID <- as.factor(wide_data$ID)
   
   # 2 -> 1
-  formula_direct_1 <- as.formula("prot.O ~ pheno.F + prot.F + 
-                                 Age.F + BMI.F +batch.F + from.F + storage_months.F + s(ID, bs='re')")
-  formula_inverse_1 <- as.formula("pheno.O ~ prot.F + pheno.F + 
-                                  Age.F + BMI.F +batch.F + from.F + storage_months.F + s(ID, bs='re')")
+  formula_direct_1 <- as.formula(paste0("prot.O ~ pheno.F + prot.F + ",
+                                        paste(paste0(covariate_names, ".F"), collapse = "+"), "+ s(ID, bs='re')"))
+  formula_inverse_1 <- as.formula(paste0("pheno.O ~ prot.F + pheno.F + ",
+                                         paste(paste0(covariate_names, ".F"), collapse = "+"), "+ s(ID, bs='re')"))
   
   fit_direct_1 <- gam(formula_direct_1, method = 'REML', data = wide_data)
   fit_inverse_1 <- gam(formula_inverse_1, method = 'REML', data = wide_data)
@@ -117,10 +122,10 @@ run_wide_models <- function(d_wide, pheno, covariates, pair){
   
   
   # 3 -> 2
-  formula_direct_2 <- as.formula("prot.EL ~ pheno.O + prot.O + 
-                                 Age.O + BMI.O +batch.O + from.O + storage_months.O + s(ID, bs='re')")
-  formula_inverse_2 <- as.formula("pheno.EL ~ prot.O + pheno.O +
-                                  Age.O + BMI.O +batch.O + from.O + storage_months.O + s(ID, bs='re')")
+  formula_direct_2 <- as.formula(paste0("prot.EL ~ pheno.O + prot.O + ",
+                                 paste(paste0(covariate_names, ".O"), collapse = "+"), "+ s(ID, bs='re')"))
+  formula_inverse_2 <- as.formula(paste0("pheno.EL ~ prot.O + pheno.O +",
+                                  paste(paste0(covariate_names, ".O"), collapse = "+"), "+ s(ID, bs='re')"))
   
   fit_direct_2 <- gam(formula_direct_2, method = 'REML', data = wide_data)
   fit_inverse_2 <- gam(formula_inverse_2, method = 'REML', data = wide_data)
@@ -140,10 +145,10 @@ run_wide_models <- function(d_wide, pheno, covariates, pair){
   
     
   # 4 -> 3
-  formula_direct_3 <- as.formula("prot.LL ~ pheno.EL + prot.EL  +
-                                 Age.EL + BMI.EL +batch.EL + from.EL + storage_months.EL + s(ID, bs='re')")
-  formula_inverse_3 <- as.formula("pheno.LL ~ prot.EL + pheno.EL  +
-                                  Age.EL + BMI.EL +batch.EL + from.EL + storage_months.EL + s(ID, bs='re')")
+  formula_direct_3 <- as.formula(paste0("prot.LL ~ pheno.EL + prot.EL  +",
+                                        paste(paste0(covariate_names, ".EL"), collapse = "+"), "+ s(ID, bs='re')"))
+  formula_inverse_3 <- as.formula(paste0("pheno.LL ~ prot.EL + pheno.EL  +",
+                                         paste(paste0(covariate_names, ".EL"), collapse = "+"), "+ s(ID, bs='re')"))
   
   fit_direct_3 <- gam(formula_direct_3, method = 'REML', data = wide_data)
   fit_inverse_3 <- gam(formula_inverse_3, method = 'REML', data = wide_data)
@@ -291,7 +296,7 @@ run_wide_models_spline <- function(d_wide, pheno, covariates, pair){
 }
 
 
-gam_res <- read.delim(paste0(out_basedir, "prot_vs_phenotypes.gam.spline.shared_prots.txt"), as.is = T, check.names = F, sep = "\t")
+gam_res <- read.delim(paste0(out_basedir, "prot_vs_hormones.gam.spline.all_prots.txt"), as.is = T, check.names = F, sep = "\t")
 pairs <- gam_res[gam_res$BH_pval < 0.05, c("prot", "pheno")]
 
 ncores <- detectCores()-1
@@ -300,17 +305,17 @@ results_list <- mclapply(seq_len(nrow(pairs)), function(i) {
 }, mc.cores = ncores)
 results_df <- do.call(rbind, results_list)
 
-write.table(results_df, file = paste0(out_basedir, "prot_vs_phenotypes.causality_wide.linear.txt"), quote = F, sep = "\t", row.names = F)
+write.table(results_df, file = paste0(out_basedir, "causality/prot_vs_hormones.causality_wide.linear.txt"), quote = F, sep = "\t", row.names = F)
 
 
-ncores <- detectCores()-1
-results_list_spline <- mclapply(seq_len(nrow(pairs)), function(i) {
-  run_wide_models_spline(d_wide, pheno, covariates, pairs[i, ])
-}, mc.cores = ncores)
-
-results_df_spline <- do.call(rbind, results_list_spline)
-
-write.table(results_df_spline, file = paste0(out_basedir, "prot_vs_hormones.causality_wide.spline.txt"), quote = F, sep = "\t", row.names = F)
+# ncores <- detectCores()-1
+# results_list_spline <- mclapply(seq_len(nrow(pairs)), function(i) {
+#   run_wide_models_spline(d_wide, pheno, covariates, pairs[i, ])
+# }, mc.cores = ncores)
+# 
+# results_df_spline <- do.call(rbind, results_list_spline)
+# 
+# write.table(results_df_spline, file = paste0(out_basedir, "prot_vs_hormones.causality_wide.spline.txt"), quote = F, sep = "\t", row.names = F)
 
 
 
@@ -329,11 +334,11 @@ results_df <- do.call(rbind, results_list)
 write.table(results_df, file = paste0(out_basedir, "hormone_vs_phenotypes.causality_wide.linear.txt"), quote = F, sep = "\t", row.names = F)
 
 
-ncores <- detectCores()-1
-results_list_spline <- mclapply(seq_len(nrow(pairs)), function(i) {
-  run_wide_models_spline(pheno, pheno, covariates, pairs[i, ])
-}, mc.cores = ncores)
-
-results_df_spline <- do.call(rbind, results_list_spline)
-
-write.table(results_df_spline, file = paste0(out_basedir, "hormone_vs_phenotypes.causality_wide.spline.txt"), quote = F, sep = "\t", row.names = F)
+# ncores <- detectCores()-1
+# results_list_spline <- mclapply(seq_len(nrow(pairs)), function(i) {
+#   run_wide_models_spline(pheno, pheno, covariates, pairs[i, ])
+# }, mc.cores = ncores)
+# 
+# results_df_spline <- do.call(rbind, results_list_spline)
+# 
+# write.table(results_df_spline, file = paste0(out_basedir, "hormone_vs_phenotypes.causality_wide.spline.txt"), quote = F, sep = "\t", row.names = F)

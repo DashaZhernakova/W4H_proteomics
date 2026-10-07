@@ -53,7 +53,21 @@ gam_prot_tp_adj_covar <- function(d_wide, prot, covariates, scale = F, rm_outlie
   
   if (scale) d_subs$prot <- scale(d_subs$prot)
   
-  covariate_names = colnames(covariates)[! colnames(covariates) %in% c("SampleID", "ID", "TP", "phase")]
+  # handle proteins completely missing for some batches
+  covariate_names <- setdiff(
+    colnames(covariates),
+    c("SampleID", "ID", "TP", "phase")
+  )
+  
+  # handle the cases when the factor (e.g. batch) has only one level  
+  d_subs <- droplevels(d_subs)
+  covariate_names <- covariate_names[
+    vapply(
+      d_subs[, covariate_names, drop = FALSE],
+      function(x) length(unique(x[!is.na(x)])) > 1,
+      logical(1)
+    )
+  ]
   
   # make GAM formula
   fo_gam <- as.formula(paste("prot ~ s(TP, k = 4) + s(ID,  bs = 're') + ", paste(covariate_names, collapse = "+")))
@@ -98,6 +112,7 @@ gam_prot_tp_adj_covar <- function(d_wide, prot, covariates, scale = F, rm_outlie
     
     new_data2 <- unique(new_data[,c("TP", "predicted", "lower", "upper")])
     
+    
     return(list(pval = pval,  edf = edf, fval = fval, n = nrow(d_subs), n_samples = length(unique(d_subs$ID)), predicted = new_data2$predicted, lower = new_data2$lower, upper = new_data2$upper))
   } 
   return(list(pval = pval,  edf = edf, fval = fval, n = nrow(d_subs), n_samples = length(unique(d_subs$ID))))
@@ -127,8 +142,8 @@ gam_prot_pheno_adj_covar <- function(d_wide, pheno, prot, ph, covariates, scale 
     pheno$TP <- as.numeric(pheno$phase)
     pheno$phase <- NULL
     
-    covariates$TP <- as.numeric(covariates$phase)
-    covariates$phase <- NULL
+    #covariates$TP <- as.numeric(covariates$phase)
+    #covariates$phase <- NULL
   }
   
   if(! ("TP" %in% colnames(covariates) || "phase" %in% colnames(covariates)) ){
@@ -152,7 +167,9 @@ gam_prot_pheno_adj_covar <- function(d_wide, pheno, prot, ph, covariates, scale 
   }
   
   covariate_names <- colnames(covariates)[! colnames(covariates) %in% c("SampleID", "ID", "TP", "phase")]
-  
+  if ("batch" %in% colnames(d_subs)){
+    if (table(na.omit(d_subs)$batch)["batch1"] == 0) covariate_names = covariate_names[covariate_names != "batch"]
+  }
   # generate the GAM formula
   if (longitudinal){
     if (adjust_timepoint == 'spline'){
@@ -281,7 +298,7 @@ gam_prot_all_pheno_together_adj_covar <- function(d_wide, pheno, prot, covariate
 #' @param covariates data frame with all covariates to add to the model
 #' @param scale Logical. Whether to scale the data. Default is FALSE.
 #' 
-lmm_prot_tp_poly3_adj_covar <- function(d_wide, prot, covariates, scale = F){
+lmm_prot_tp_poly3_adj_covar <- function(d_wide, prot, covariates, scale = T, report_singular = F ){
   # if phases not visits, convert phase letter into phase number
   phases = F
   if(! "TP" %in% colnames(d_wide) & "phase" %in% colnames(d_wide)){
@@ -299,16 +316,32 @@ lmm_prot_tp_poly3_adj_covar <- function(d_wide, prot, covariates, scale = F){
   d_subs$TP <- as.numeric(d_subs$TP)
   d_subs <- na.omit(d_subs)
   
-  covariate_names = colnames(covariates)[! colnames(covariates) %in% c("SampleID", "ID", "TP", "phase")]
+  if (scale) {
+    d_subs$prot <- as.numeric(scale(d_subs$prot))
+  }
+  
+  # handle proteins completely missing for some batches
+  covariate_names <- setdiff(
+    colnames(covariates),
+    c("SampleID", "ID", "TP", "phase")
+  )
+  
+  d_subs <- droplevels(d_subs)
+  
+  if ("batch" %in% covariate_names &&
+      dplyr::n_distinct(d_subs$batch) < 2) {
+    covariate_names <- setdiff(covariate_names, "batch")
+  }
   
   fo_lmm <- as.formula(paste("prot ~ poly(TP,3) +", paste(covariate_names, collapse = "+"), "+ (1|ID)"))
-  model <- lmer(fo_lmm, data = d_subs)
+  model <- lmer(fo_lmm, data = d_subs, REML = F)
   fo_lmm_base <- as.formula(paste("prot ~ ", paste(covariate_names, collapse = "+"), "+ (1|ID)"))
-  model0 <- lmer(fo_lmm_base, data = d_subs)
+  model0 <- lmer(fo_lmm_base, data = d_subs, REML = F)
   an <- suppressMessages(anova(model, model0))
   pval <- an$`Pr(>Chisq)`[2]
-  
-  return(pval)
+  singular <- isSingular(model)
+  if (report_singular) return(list(pval = pval, singular = singular))
+  return (pval)
 }
 
 #' Performs association analysis between protein levels and phase or visit using LMMs treating the phase/visit as a factor
@@ -358,7 +391,7 @@ lmm_prot_tp_factor_adj_covar <- function(d_wide, prot, covariates, scale = T){
 #' @param adjust_timepoint how to adjust for the phase/visit. Can be one of "none" (do not adjust for timepoint), "linear" (add timepoint as a linear term), "cubic" (add timepoint as 3rd degree polynomial terms)
 #' @param longitudinal Logical. Whether to run a LMM with random intercept (default) or a simple lm with no random effect
 #' 
-lmm_pheno_prot_adj_covar <- function(d_wide, pheno, prot, ph, covariates, scale = F, adjust_timepoint = "cubic", longitudinal = T){
+lmm_pheno_prot_adj_covar <- function(d_wide, pheno, prot, ph, covariates, scale = F, adjust_timepoint = "cubic", longitudinal = T, report_singular = F){
   # if data has phases instead of visits convert phase letter into phase number
   phases = F
   if(! "TP" %in% colnames(d_wide) & "phase" %in% colnames(d_wide)){
@@ -393,7 +426,10 @@ lmm_pheno_prot_adj_covar <- function(d_wide, pheno, prot, ph, covariates, scale 
   }
   
   covariate_names <- colnames(covariates)[! colnames(covariates) %in% c("SampleID", "ID", "TP", "phase")]
-  
+  if ("batch" %in% colnames(d_subs)){
+    if (table(na.omit(d_subs)$batch)["batch1"] == 0) covariate_names = covariate_names[covariate_names != "batch"]
+  }
+
   if (longitudinal){
     if (adjust_timepoint == 'cubic'){
       fo_lmm <- as.formula(paste("prot ~ poly(TP, 3) + pheno +", paste(covariate_names, collapse = "+"), "+ (1|ID)"))
@@ -418,7 +454,9 @@ lmm_pheno_prot_adj_covar <- function(d_wide, pheno, prot, ph, covariates, scale 
   se <- summary(model)$coefficients["pheno","Std. Error"]
   tval <- summary(model)$coefficients["pheno","t value"]
   pval <- summary(model)$coefficients["pheno","Pr(>|t|)"]
+  singular <- isSingular(model)
   
+  if (report_singular) return(list(estimate = est, pval = pval, se = se, tval = tval, n = nrow(d_subs), n_samples = length(unique(d_subs$ID)), issingular = singular))
   return(list(estimate = est, pval = pval, se = se, tval = tval, n = nrow(d_subs), n_samples = length(unique(d_subs$ID))))
 }
 
@@ -455,6 +493,50 @@ lmm_prot_tp_interaction_pheno_adj_covar <- function(d_wide, pheno, prot, ph, cov
   
   return( pval)
 }
+
+# compare GAM and LMM
+compare_gam_lmm <- function(d_wide, prot, covariates){
+  # if d_wide has phases instead of visits convert phase letter into phase number
+  phases = F
+  if(! "TP" %in% colnames(d_wide) & "phase" %in% colnames(d_wide)){
+    phases = T
+    #cat("Working with phases not visit numbers!\n")
+    d_wide$TP <- as.numeric(d_wide$phase)
+    d_wide$phase <- NULL
+    
+    covariates$TP <- as.numeric(covariates$phase)
+    covariates$phase = NULL
+  }
+  
+  # combine protein and covariate datasets
+  d_subs <- inner_join(d_wide[,c(prot, "SampleID", "ID", "TP")], covariates, by = c("SampleID", "ID", "TP"))
+  colnames(d_subs)[1] <- "prot"
+  
+  d_subs$TP <- as.numeric(d_subs$TP)
+  d_subs$ID <- as.factor(d_subs$ID)
+  d_subs <- na.omit(d_subs)
+  
+  d_subs$prot <- scale(d_subs$prot)
+  
+  covariate_names = colnames(covariates)[! colnames(covariates) %in% c("SampleID", "ID", "TP", "phase")]
+  if ("batch" %in% colnames(d_subs)){
+    if (table(d_subs$batch)["batch1"] == 0) covariate_names = covariate_names[covariate_names != "batch"]
+  }
+  
+  # make GAM formula
+  fo_gam <- as.formula(paste("prot ~ s(TP, k = 4) + s(ID,  bs = 're') + ", paste(covariate_names, collapse = "+")))
+  fo_lmm <- as.formula(paste("prot ~ poly(TP,3) +", paste(covariate_names, collapse = "+"), "+ (1|ID)"))
+  # run the models
+  model_gam <- gam(fo_gam, data = d_subs,  method = 'ML')
+  model_lmm <- lmer(fo_lmm, data = d_subs, REML = FALSE)
+  
+  aic <-AIC(model_lmm, model_gam)
+  bic <- BIC(model_lmm, model_gam)
+   
+  return(list(aic,bic))
+}
+
+
 
 # Run association between protein and phenotype using lm per phase/visit 
 lm_per_tp_pheno_prot_adj_covar <- function(d_wide, pheno, prot, ph, covariates, scale = F){
@@ -541,9 +623,14 @@ get_ICC <- function(d_wide, prot){
    prop_ID <- var_ID / total_var  # Proportion of variance explained by ID
    
    R2m <- performance::r2(m)$R2_marginal
-   
+   if (var_ID == 0){
+     prop_ID = NA
+     R2m = NA
+   }
    return (list(ICC = prop_ID, var_tp = R2m))
 }
+
+
 
 #' Run differential abundance analysis using limma
 #'
@@ -551,8 +638,8 @@ get_ICC <- function(d_wide, prot){
 #' @param tp1 first phase to compare
 #' @param tp2 second phase to compare
 #' 
-run_limma<-function(joined_data, tp1, tp2) {
-  df <-joined_data[joined_data$phase %in% c(tp1, tp2),]
+run_limma<-function(joined_data, tp1, tp2, all_prots, covariate_names) {
+  df <-joined_data[joined_data$phase %in% c(tp1, tp2),c("ID", "phase", covariate_names, all_prots)]
   df$ID <- as.factor(df$ID)
   df$SampleID <- NULL
   df$phase <- factor(df$phase, levels = c(tp1,tp2))
@@ -565,25 +652,114 @@ run_limma<-function(joined_data, tp1, tp2) {
   
   # specify the pairing
   corfit <- duplicateCorrelation(t(df[,all_prots]), design, block = df$ID)
+
+  # apply linear model to each protein
+  fit<-lmFit(t(df[,all_prots]), block = df$ID, design=design,  method="ls", correlation =
+               corfit$consensus)
   
   # make contrast - what to compare
   contrast<- makeContrasts(Diff = phase2 - phase1, levels=design)
-  
-  # apply linear model to each protein
-  # Robust regression provides an alternative to least squares regression that works with less restrictive assumptions. Specifically, it provides much better regression coefficient estimates when outliers are present in the data
-  fit<-lmFit(t(df[,all_prots]), design=design,  method="robust", correlation =
-               corfit$consensus )
   # apply contrast
   contrast_fit<-contrasts.fit(fit, contrast)
   # apply empirical Bayes smoothing to the SE
-  ebays_fit<-eBayes(contrast_fit)
+  ebays_fit<-eBayes(contrast_fit, robust = T)   
   # summary
   print(summary(decideTests(ebays_fit)))
   # extract DE results
   DE_results<-topTable(ebays_fit, n=length(all_prots), adjust.method="BH", confint=TRUE)
+  #DE_results <- cbind(DE_results, group_means[rownames(DE_results), ])
   #DE_results$Bonferroni_signif <- ifelse(DE_results$P.Value < 0.05 / nrow(DE_results), T, F)
   return(DE_results)
 }
+
+run_limma_all_phases <-function(joined_data,  all_phases, all_prots, covariate_names) {
+  df <-joined_data[,c("ID", "phase", covariate_names, all_prots)]
+  df$ID <- as.factor(df$ID)
+  df$SampleID <- NULL
+
+  # design a model 
+  formula <- reformulate(termlabels = c("0 + phase", covariate_names), 
+                         response = NULL)
+  design<-model.matrix(formula, data = df)
+  colnames(design)[seq_along(all_phases)] <- paste0(
+    "phase", seq_along(all_phases)
+  )
+  
+  # specify the pairing
+  corfit <- duplicateCorrelation(t(df[,all_prots]), design, block = df$ID)
+  cat("duplicate correlation: ", corfit$consensus, "\n")
+  # apply linear model to each protein
+  fit<-lmFit(t(df[,all_prots]), block = df$ID, design=design,  method="ls", correlation =
+               corfit$consensus)
+  
+  # make contrast - what to compare
+  phase_comb <- t(combn(seq_along(all_phases), 2))
+  
+  contrast <- makeContrasts(
+    contrasts = paste0(
+      "phase", phase_comb[, 2], " - phase", phase_comb[, 1]
+    ),
+    levels = design
+  )
+  contrast_fit <- contrasts.fit(fit, contrast)
+  ebays_fit <- eBayes(contrast_fit, robust = TRUE)
+  print(summary(decideTests(ebays_fit)))  
+  
+  limma_res_all <- data.frame()
+  
+  for (i in seq_len(nrow(phase_comb))) {
+    tp1 <- all_phases[phase_comb[i, 1]]
+    tp2 <- all_phases[phase_comb[i, 2]]
+    
+    limma_res <- topTable(
+      ebays_fit,
+      coef = i,
+      n = length(all_prots),
+      adjust.method = "BH",
+      confint = TRUE
+    ) %>%
+      rownames_to_column(var = "prot")
+    
+    limma_res_all <- rbind(
+      limma_res_all,
+      cbind(phase1_phase2 = paste0(tp1, "_", tp2), limma_res)
+    )
+  }
+  
+  return(limma_res_all)
+}
+run_limma_old <- function(joined_data, tp1, tp2, all_prots, covariate_names) {
+  df <-joined_data[joined_data$phase %in% c(tp1, tp2),c("ID", "phase", covariate_names, all_prots)] 
+  df$ID <- as.factor(df$ID) 
+  df$SampleID <- NULL 
+  df$phase <- factor(df$phase, levels = c(tp1,tp2)) 
+  # design a model 
+  formula <- reformulate(termlabels = c("0 + as.factor(phase)", covariate_names), response = NULL) 
+  design<-model.matrix(formula, data = df) 
+  colnames(design)[c(1,2)] <- c("phase1", "phase2") 
+  # specify the pairing 
+  corfit <- duplicateCorrelation(t(df[,all_prots]), design, block = df$ID) 
+  # make contrast - what to compare 
+  contrast<- makeContrasts(Diff = phase2 - phase1, levels=design) 
+  # apply linear model to each protein 
+  # Robust regression provides an alternative to least squares regression that works with less restrictive assumptions. Specifically, it provides much better regression coefficient estimates when outliers are present in the data 
+  fit<-lmFit(t(df[,all_prots]), design=design, method="robust", correlation = corfit$consensus ) 
+  # Extract group means directly from the fit coefficients 
+  #group_means <- as.data.frame(fit$coefficients)[,c("phase1", "phase2")] 
+  #colnames(group_means) <- paste0("Adjusted_mean_", colnames(group_means)) 
+  # apply contrast 
+  contrast_fit<-contrasts.fit(fit, contrast) 
+  # apply empirical Bayes smoothing to the SE 
+  ebays_fit<-eBayes(contrast_fit) 
+  # summary 
+  print(summary(decideTests(ebays_fit))) 
+  # extract DE results 
+  DE_results<-topTable(ebays_fit, n=length(all_prots), adjust.method="BH", confint=TRUE) 
+  #DE_results <- cbind(DE_results, group_means[rownames(DE_results), ]) 
+  #DE_results$Bonferroni_signif <- ifelse(DE_results$P.Value < 0.05 / nrow(DE_results), T, F) 
+  return(DE_results) }
+
+
 
 #' Run paired wilcoxon test to compare protein levels between 2 phases
 #'
@@ -687,6 +863,106 @@ regress_covariates_lmm_phase <- function(data, covar_data, covars_longitudinal =
     data$phase <- NULL
   }
   
+  if (!"SampleID" %in% colnames(covar_data) && covars_longitudinal) {
+    covar_data$SampleID <- paste0(covar_data$ID, "_", covar_data$TP)
+  }
+  
+  d_adj <- data[,c("SampleID", "ID", "TP")]
+  
+  #data[,"TP"] <- NULL
+  #covar_data[,"TP"] <- NULL
+  
+  covar_names = setdiff(colnames(covar_data), c("SampleID", "ID", "TP", "phase"))
+  all_pheno = setdiff(colnames(data), c("SampleID", "ID", "TP", "phase"))
+  
+  cat("Adjusting for the following base covariates: ", covar_names, "\n")
+  cnt <- 1
+  for (ph in all_pheno){
+    #print(ph)
+    if (covars_longitudinal){
+      covar_data$ID <- NULL
+      subs <- inner_join(data[, c("ID","SampleID", ph)], covar_data[,c("SampleID", covar_names)], by = "SampleID")
+    } else {
+      subs <- inner_join(data[, c("ID","SampleID", ph)], covar_data[,c("ID", covar_names)], by = "ID")
+    }
+    
+    subs <- subs %>%
+      filter(complete.cases(.)) %>%
+      mutate(ID = factor(ID)) %>%
+      rename(pheno = all_of(ph)) %>%
+      droplevels()
+    
+    # create a list of covariates relevant for this protein: e.g. remove batch if protein measured in one batch
+    valid_covars <- covar_names[
+      vapply(
+        subs[, covar_names, drop = FALSE],
+        function(x) {
+          dplyr::n_distinct(x, na.rm = TRUE) > 1
+        },
+        logical(1)
+      )
+    ]
+    
+    repeated_measurements <- anyDuplicated(subs$ID) > 0
+    
+    if (!repeated_measurements) { # if no repeated measurements
+      
+      fo_lm <- as.formula(paste("pheno ~ ", paste(valid_covars, collapse = "+")))
+      lm_fit <- lm(fo_lm, data = subs)
+      prediction <- predict(model)
+      
+    } else { # if repeated measurements
+      
+      fo_lmm <- as.formula(paste("pheno ~ ", paste(valid_covars, collapse = "+"), "+ (1|ID)"))
+      lmm_fit <- lmer(fo_lmm, data = subs)
+      prediction <- lme4:::predict.merMod(lmm_fit, re.form = NA)
+      #if (!keep_scale){
+      #  subs[,ph] <- subs$pheno - lme4:::predict.merMod(lmm_fit, re.form = NA)
+      #} else { # keep the original scale and global mean
+      #  intercept <- fixef(lmm_fit)[1]
+      #  predicted <- lme4:::predict.merMod(lmm_fit, re.form = NA)
+      #  subs[,ph] <- subs$pheno - (predicted - intercept)
+      #}
+    }
+    
+    if (keep_scale) {
+      # Subtract fixed covariate variation but preserve the original mean of this protein in the analysed samples
+      subs[,ph] <- subs$pheno - prediction + mean(prediction)
+      
+    } else {
+      
+      # Fixed-effects-adjusted, approximately centered values
+      subs[,ph] <- subs$pheno - prediction
+    }
+    
+    d_adj <- left_join(d_adj, subs[, c("SampleID", ph)], by = "SampleID")
+  }
+  
+  if(phases){
+    cat ("renaming TP to phase\n")
+    d_adj <- rename_TP_to_phase(d_adj)
+  }
+  
+  return(d_adj)
+}
+
+#' Regress covariates using a LM
+#'
+#' @param data data frame to regress covariates from
+#' @param covar_data data frame with covariates to regress
+#' @param covars_longitudinal Logical. True if there are repeated measures
+#' @param keep_scale Logical. True if we want to keep the original scale after adjustment
+
+regress_covariates_lm <- function(data, covar_data, covars_longitudinal = T, keep_scale = F){
+  # if data has phases instead of visits convert phase letter into phase number
+  phases = F
+  if(! "TP" %in% colnames(data) & "phase" %in% colnames(data)){
+    phases = T
+    cat("Working with phases not visit numbers!\n")
+    data$TP <- as.numeric(data$phase)
+    data$phase <- NULL
+  }
+  
   if (!"SampleID" %in% colnames(covar_data) & covars_longitudinal) {
     covar_data <- cbind(paste0(covar_data$ID, "_",covar_data$TP), covar_data)
     colnames(covar_data)[1] <- "SampleID"
@@ -698,8 +974,9 @@ regress_covariates_lmm_phase <- function(data, covar_data, covars_longitudinal =
   covar_data[,"TP"] <- NULL
   
   covar_names = colnames(covar_data)[! colnames(covar_data) %in% c("SampleID", "ID", "TP", "phase")]
+  all_pheno = colnames(data)[! colnames(data) %in% c("SampleID", "ID", "TP", "phase")]
   cnt <- 1
-  for (ph in colnames(data)[3: (ncol(data))]){
+  for (ph in all_pheno){
     if (covars_longitudinal){
       covar_data$ID <- NULL
       subs <- na.omit(inner_join(data[, c("ID","SampleID", ph)], covar_data, by = "SampleID"))
@@ -708,27 +985,16 @@ regress_covariates_lmm_phase <- function(data, covar_data, covars_longitudinal =
     }
     colnames(subs)[3] <- 'pheno'
     
-    if (length(unique(subs$ID)) == length(subs$ID)) { # if no repeated measurements
-      fo_lm <- as.formula(paste("pheno ~ ", paste(covar_names, collapse = "+")))
-      lm_fit <- lm(fo_lm, data = subs)
-      if (!keep_scale){
-        subs[,ph] <- residuals(lm_fit)
-      } else { # keep the original scale and global mean
-        intercept <- coef(lm_fit)[1]
-        subs[,ph] <- subs$pheno - (predict(lm_fit) - intercept)
-      }
-
-    } else {
-      fo_lmm <- as.formula(paste("pheno ~ ", paste(covar_names, collapse = "+"), "+ (1|ID)"))
-      lmm_fit <- lmer(fo_lmm, data = subs)
-      if (!keep_scale){
-        subs[,ph] <- subs$pheno - lme4:::predict.merMod(lmm_fit, re.form = NA)
-      } else { # keep the original scale and global mean
-        intercept <- fixef(lmm_fit)[1]
-        predicted <- lme4:::predict.merMod(lmm_fit, re.form = NA)
-        subs[,ph] <- subs$pheno - (predicted - intercept)
-      }
+    
+    fo_lm <- as.formula(paste("pheno ~ ", paste(covar_names, collapse = "+")))
+    lm_fit <- lm(fo_lm, data = subs)
+    if (!keep_scale){
+      subs[,ph] <- residuals(lm_fit)
+    } else { # keep the original scale and global mean
+      intercept <- coef(lm_fit)[1]
+      subs[,ph] <- subs$pheno - (predict(lm_fit) - intercept)
     }
+      
     d_adj <- left_join(d_adj, subs[, c("SampleID", ph)], by = "SampleID")
   }
   
@@ -739,6 +1005,97 @@ regress_covariates_lmm_phase <- function(data, covar_data, covars_longitudinal =
   
   return(d_adj)
 }
+
+#' Regress covariates using a LM per phase
+#'
+#' @param data data frame to regress covariates from
+#' @param covar_data data frame with covariates to regress
+#' @param covars_longitudinal Logical. True if there are repeated measures
+#' @param keep_scale Logical. True if we want to keep the original scale after adjustment
+
+regress_covariates_lm_per_phase <- function(data, covar_data, covars_longitudinal = T, keep_scale = F){
+  # if data has phases instead of visits convert phase letter into phase number
+  phases = F
+  if(! "TP" %in% colnames(data) & "phase" %in% colnames(data)){
+    phases = T
+    cat("Working with phases not visit numbers!\n")
+    data$TP <- as.numeric(data$phase)
+    data$phase <- NULL
+  }
+  
+  # Prepare covariate data based on longitudinal structure
+  if (covars_longitudinal) {
+    # Covariates measured at each timepoint (need SampleID)
+    if (!"SampleID" %in% colnames(covar_data)) {
+      covar_data <- covar_data %>%
+        mutate(SampleID = paste0(ID, "_", TP))
+    }
+    join_by <- "SampleID"
+    covar_data <- covar_data %>% select(-any_of(c("ID", "TP", "phase")))
+  } else {
+    # Time-invariant covariates (join by ID)
+    join_by <- "ID"
+    covar_data <- covar_data %>% select(-any_of(c("TP", "phase", "SampleID")))
+  }
+  
+  covar_names <- covar_data %>%
+    select(-any_of(c("SampleID", "ID", "TP", "phase"))) %>%
+    colnames()
+  
+  all_pheno <- data %>%
+    select(-any_of(c("SampleID", "ID", "TP", "phase"))) %>%
+    colnames()
+  
+  d_adj <- data[, c("SampleID", "ID", "TP")]
+  
+  for (ph in all_pheno) {
+    
+    # Merge data with covariates
+    merged_data <- data %>%
+        select(SampleID, ID, TP, all_of(ph)) %>%
+        inner_join(covar_data, by = join_by) %>%
+        na.omit()
+    colnames(merged_data)[colnames(merged_data) == ph] <- "pheno"
+    
+    tp_results <- merged_data %>%
+      group_by(TP) %>%
+      group_modify(~ {
+        # Fit linear model for this timepoint
+        formula <- as.formula(paste("pheno ~", paste(covar_names, collapse = " + ")))
+        lm_fit <- lm(formula, data = .x)
+        
+        # Calculate adjusted values
+        if (!keep_scale) {
+          # Return residuals (covariate-adjusted, centered at 0)
+          .x$adjusted <- residuals(lm_fit)
+        } else {
+          # Keep original scale and global mean
+          intercept <- coef(lm_fit)[1]
+          .x$adjusted <- residuals(lm_fit)+ intercept
+        }
+        
+        # Return SampleID and adjusted values
+        .x %>% select(SampleID, adjusted)
+      }) %>%
+      ungroup() %>%
+      # Rename the adjusted column to the phenotype name
+      rename_with(~ ph, adjusted) %>%
+      select(-TP)
+    
+    d_adj <- d_adj %>%
+      left_join(tp_results, by = "SampleID")
+  }
+  if (phases) {
+    d_adj$ID <- gsub("_.*", "", d_adj$SampleID)
+    d_adj$phase <- gsub(".*_", "", d_adj$SampleID)
+    d_adj <- d_adj %>%
+      dplyr::select(SampleID, ID, phase, everything())
+  }
+  
+  return(d_adj)
+}
+    
+    
 
 # Rename phase or visit number  number into phase letter
 rename_TP_to_phase <- function(d) {
@@ -1046,7 +1403,7 @@ plot_clusters <- function(cl, method = "", num_k = "", colored = F, signif = NUL
   
 }
 
-plot_association_heatmap <- function(assoc_df, prot_subs, rows = 'pheno', cols = 'prot', vals = 'estimate', signif_vals = 'BH_pval', transpose = F, cutrows = NA, cutcols = NA, cluster_cols = T, col_order = NULL){
+plot_association_heatmap <- function(assoc_df, prot_subs, rows = 'pheno', cols = 'prot', vals = 'estimate', signif_vals = 'BH_pval', transpose = F, cutrows = NA, cutcols = NA, cluster_cols = T, col_order = NULL, fontsize = 10){
   assoc_df_wide <- my_pivot_wider(assoc_df[assoc_df$prot %in% prot_subs,], rows, cols, vals)
   signif_labels <- my_pivot_wider(assoc_df[assoc_df$prot %in% prot_subs,], rows, cols, signif_vals)
   signif_labels <- ifelse(signif_labels < 0.05, "*", "")
@@ -1054,8 +1411,11 @@ plot_association_heatmap <- function(assoc_df, prot_subs, rows = 'pheno', cols =
   if (transpose){
     assoc_df_wide <- as.data.frame(t(assoc_df_wide))
     signif_labels <- as.data.frame(t(signif_labels))
-    fontsize_row = 8
+    fontsize_row = fontsize
     fontsize_col = 10
+  } else {
+    fontsize_col = fontsize
+    fontsize_row = 10
   }
   if (!is.null(col_order)) {
     assoc_df_wide <- assoc_df_wide[, col_order, drop = FALSE]
@@ -1064,8 +1424,13 @@ plot_association_heatmap <- function(assoc_df, prot_subs, rows = 'pheno', cols =
   
   max_val <- max(abs(min(assoc_df_wide)), max(assoc_df_wide))
   breaksList = seq(-max_val, max_val, by = 0.01)
-  colorList <- colorRampPalette(rev(brewer.pal(n = 11, name = "RdYlBu")))(length(breaksList))
-  h <- pheatmap(assoc_df_wide, display_numbers = signif_labels, fontsize_number = 10, 
+  if(!0 %in% breaksList) breaksList <- sort(c(breaksList, 0))
+  
+  full_palette <- rev(brewer.pal(n = 11, name = "RdYlBu"))
+  full_palette[ceiling(length(full_palette)/2)] <- "#FFFFFF"
+  colorList <- colorRampPalette(full_palette)(length(breaksList))
+  
+  h <- pheatmap::pheatmap(assoc_df_wide, display_numbers = signif_labels,  
                 fontsize_col = fontsize_col, fontsize_row = fontsize_row,
                 color = colorList, breaks = breaksList, cutree_rows = cutrows, 
                 cutree_cols = cutcols, cluster_cols = cluster_cols)
@@ -1074,8 +1439,8 @@ plot_association_heatmap <- function(assoc_df, prot_subs, rows = 'pheno', cols =
 }
 
 plot_association_volcano <- function(assoc_df){
-  if ("PROG" %in% assoc_df$pheno) desired_order <- c("PROG", "17BES", "LH", "FSH","PRL")
-  if (!"PROG" %in% assoc_df$pheno) desired_order <- c("ALT", "AST", "TRI", "HDL", "COL", "LDL", "INS", "HOMA_B", "HOMA_IR", "GL")
+  if ("P4" %in% assoc_df$pheno) desired_order <- c("P4", "E2", "LH", "FSH","PRL")
+  if (!"P4" %in% assoc_df$pheno) desired_order <- c("ALT", "AST", "TRI", "HDL", "COL", "LDL", "INS", "HOMA_B", "HOMA_IR", "GL")
   ggplot(assoc_df, aes(x = estimate, y = -log10(BH_pval))) +
     geom_point(aes(color = BH_pval < 0.05), alpha = 0.7) +
     geom_hline(yintercept = -log10(0.05), linetype = "dashed") +
@@ -1086,11 +1451,12 @@ plot_association_volcano <- function(assoc_df){
       data = subset(assoc_df, BH_pval < 0.05),
       aes(label = prot), 
       size = 2,
-      max.overlaps = 20
+      max.overlaps = 10
     ) +
-    facet_wrap(~ factor(pheno, levels = desired_order)) +
-    theme_minimal() +
-    labs(color = "Significance")
+    facet_wrap(~ factor(pheno, levels = desired_order), ncol = 2) +
+    theme_bw() +
+    labs(color = "Significance") + 
+    theme(legend.position = "none")
 }
 
 # scatter colored by visit to see the relationship at each visit
@@ -1127,13 +1493,13 @@ scatter_col_tp <- function(d_wide, pheno, prot, ph, scale = F, add_points = F){
          title = paste0(ph, " - ", prot))  +
     scale_color_manual(values = my_colors)
   
-  if (add_points) g <- g + geom_point()
+  if (add_points) g <- g + geom_point(alpha = 0.5)
   if(phases) {
     g <-g + scale_color_manual(
       breaks = c(1, 2, 3, 4),
       labels = c("F", "O", "EL", "LL"),
       values = my_colors
-    )
+    ) + labs(colour="Phase")
   }
   g
 }
@@ -1181,4 +1547,10 @@ plot_boxplot_with_traj <- function(d_adj, prot) {
     )
   
   return(p)
+}
+
+rename_p4_e2 <- function(vector){
+  vector <- gsub("^17BES$","E2", vector)
+  vector <- gsub("^PROG$","P4", vector)
+  return(vector)
 }

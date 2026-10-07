@@ -10,37 +10,23 @@ library(patchwork)
 library(lubridate)
 library(purrr)
 library(tibble)
+library(colorRamp2)
 
 set.seed(123)
 out_basedir <- "results12/"
 
-d_wide <- read.delim("data/olink_batch12.intensity.bridged_all_proteins_lod150_wide.txt", as.is = T, check.names = F, sep = "\t", colClasses = c(ID = "character"))
+d_wide <- read.delim("data/olink_batch12.intensity.bridged_all_proteins_lod150_wide.txt", as.is = T, check.names = F, sep = "\t")
 batch_info <- read.delim("data/batch_info.txt", as.is = T, check.names = F, sep = "\t")
 
 d_wide$TP <- gsub(".*_","", d_wide$SampleID)
 d_wide$ID <- gsub("_.*","", d_wide$SampleID)
 d_wide <- d_wide %>% select(SampleID, ID, TP, everything())
 
-batch2_shared_prots <- colnames(d_wide)[colSums(is.na(d_wide)) < 50]
-d_wide_shared <- d_wide[ ,batch2_shared_prots]
 d_wide_b2 <- d_wide[d_wide$SampleID %in% batch_info[batch_info$Batch == 'batch2', "SampleID"],]
 
-dim(d_wide)
 dim(d_wide_b2)
-dim(d_wide_shared)
 
 
-################################################################################
-# PCA on proteins with missing data (nipals) on shared proteins
-################################################################################
-
-res_pca <- run_pca_nipals_per_tp(d_wide_shared, nPCs = 70)
-num_pcs_80_b12 <- res_pca$num_pcs_80
-pca_per_tp_b12 <- res_pca$pca_per_tp
-
-max(as.numeric(num_pcs_80_b12))
-# [1] 60
-write.table(pca_per_tp_b12, file = paste0(out_basedir, "olink_batch12_shared_prot_rm_outliers_4sd.PCA.txt"), quote = F, sep = "\t", row.names = FALSE)
 
 ################################################################################
 # PCA on proteins with missing data (nipals) on batch2 data
@@ -127,24 +113,24 @@ write.table(collect_date, file = paste0(out_basedir, "correlations_with_covariat
 collect_date$season <- factor(collect_date$season, levels = c("Winter", "Spring", "Summer", "Autumn"))
 collect_date$season_num <- as.numeric(collect_date$season)
 
-season_kw <-  run_kruskal_test_each_TP(pca_per_tp_b12, collect_date[,c("ID", "TP","season")])
-storage_lm <-  run_lm_each_TP(pca_per_tp_b12, collect_date[,c("ID", "TP","storage_months")])
+season_kw <-  run_kruskal_test_each_TP(pca_per_tp_b2, collect_date[,c("ID", "TP","season")])
+storage_lm <-  run_lm_each_TP(pca_per_tp_b2, collect_date[,c("ID", "TP","storage_months")])
 
-write.table(season_kw, file = paste0(out_basedir, "correlations_with_covariates/shared_prots_season_KW.txt"), quote = F, sep = "\t", row.names = FALSE)
-write.table(storage_lm, file = paste0(out_basedir, "correlations_with_covariates/shared_prots_storage_lm_per_tp.txt"), quote = F, sep = "\t", row.names = FALSE)
+write.table(season_kw, file = paste0(out_basedir, "correlations_with_covariates/all_prots_season_KW.txt"), quote = F, sep = "\t", row.names = FALSE)
+write.table(storage_lm, file = paste0(out_basedir, "correlations_with_covariates/all_prots_storage_lm_per_tp.txt"), quote = F, sep = "\t", row.names = FALSE)
 
-tmp <- left_join(pca_per_tp_b12, collect_date[,c("ID", "TP","season", "storage_months")], by = c("ID", "TP"))
+tmp <- left_join(pca_per_tp_b2, collect_date[,c("ID", "TP","season", "storage_months")], by = c("ID", "TP"))
 ggplot(tmp, aes(y = PC5, x = PC6, color = season)) + 
   geom_point() + 
   scale_color_manual(values = my_colors) +
   theme_minimal()
 
-pls <- plot_PCA_boxplot(pca_per_tp_b12, collect_date[,c("ID", "storage_months")], 'PC6', 'storage_months')
+pls <- plot_PCA_boxplot(pca_per_tp_b2, collect_date[,c("ID", "storage_months")], 'PC6', 'storage_months')
 pdf(paste0(out_basedir, "correlations_with_covariates/plots/shared_prots_PC_vs_storage_months.pdf"), width = 10, height = 5)
 pls[[1]] + pls[[2]]
 dev.off()
 
-pls <- plot_PCA_boxplot(pca_per_tp_b12, collect_date[,c("ID", "season", "storage_quarters")], 'PC1', 'season')
+pls <- plot_PCA_boxplot(pca_per_tp_b2, collect_date[,c("ID", "season", "storage_quarters")], 'PC1', 'season')
 pdf(paste0(out_basedir, "correlations_with_covariates/plots/shared_prots_PC_vs_season.pdf"), width = 10, height = 5)
 pls[[1]] + pls[[2]]
 dev.off()
@@ -156,7 +142,7 @@ pca_per_tp_adj <- run_pca_nipals_per_tp(d_wide_shared_adj)$pca_per_tp
 season_kw_adj <-  run_kruskal_test_each_TP(pca_per_tp_adj, collect_date[,c("ID", "TP","season")])
 storage_lm_adj <-  run_lm_each_TP(pca_per_tp_adj, collect_date[,c("ID", "TP","storage_months")])
 
-pca_per_tp_annot <- left_join(pca_per_tp_b12, batch_info, by = "SampleID")
+pca_per_tp_annot <- left_join(pca_per_tp_b2, batch_info, by = "SampleID")
 pca_per_tp_adj_annot <- left_join(pca_per_tp_adj, batch_info, by = "SampleID")
 ggplot(pca_per_tp_annot, aes(PC1, PC2, color = geo)) + geom_point() + theme_minimal()
 ggplot(pca_per_tp_adj_annot, aes(PC1, PC2, color = geo)) + geom_point() + theme_minimal()
@@ -189,7 +175,7 @@ pheno_0$Code <- NULL
 #pheno_0$Patient_id <- NULL
 #colnames(pheno_0) <- gsub("Visit_number", "TP", colnames(pheno_0),fixed = T)
 pheno_0$ID <- gsub("X", "", pheno_0$ID )
-pheno_0 <- pheno_0[pheno_0$ID %in% d_wide_shared$ID,]
+pheno_0 <- pheno_0[pheno_0$ID %in% d_wide_b2$ID,]
 
 factor_counts <- lapply(pheno_0, function(column) {
   if (length(unique(column)) < 5) {
@@ -217,23 +203,27 @@ pheno_0$BMI_ranges <- NULL
 
 continuous_pheno <- c("Age", "BMI", "Waist_circumference", "Hip_circumference","WHR", "numero_gravidanze","altezza_cm", "peso_kg", "anni_stop_pillola")
 
+name_convertion <- data.frame(it_name = c("from", "Age", "BMI", "Pill_use", "Waist_circumference", "peso_kg", "season", "storage_months", "Hip_circumference", "numero_gravidanze", "Pregnancy_category", "anni_stop_pillola", "altezza_cm", "diagnosi_covid", "alcol", "WHR", "caffe", "interventi_addome", "colester_famil_secondo", "Smoker", "t2d_famil_secondo"),
+                              en_name = c("city_of_collection", "Age", "BMI", "Pill_use", "Waist_circumference", "Weight", "Season", "Storage_months", "Hip_circumference", "Number_of_pregnancies", "Pregnancy_category", "Years_since_pills", "Height", "Covid_diagnosis", "Alcohol_comsumption", "WHR", "Coffee_consumption", "Prior_abdomen_interventions", "high_cholesterol_relatives", "Smoking_status", "T2D_relatives"))
+
 
 # Kruskal Wallis test on categorical covariates
-covar_kw_res <- run_kruskal_test_each_TP(pca_per_tp_b12, pheno_0[,! colnames(pheno_0) %in% continuous_pheno])
+covar_kw_res <- run_kruskal_test_each_TP(pca_per_tp_b2, pheno_0[,! colnames(pheno_0) %in% continuous_pheno])
 colnames(covar_kw_res)[4] <- "pval"
 
 # Linear regression on Age and BMI
 pheno_cont_0 <- pheno_0[,c("ID", continuous_pheno)]
 
-covar_lm_res <- run_lm_each_TP(pca_per_tp, pheno_cont_0)
+covar_lm_res <- run_lm_each_TP(pca_per_tp_b2, pheno_cont_0)
 
 colnames(season_kw)[4] <- "pval"
 
 combined_covar_res <- rbind(covar_kw_res, subset(covar_lm_res, select = -c(beta)),
                             season_kw, subset(storage_lm, select = -c(beta)) )
 
-
-
+combined_covar_res <- left_join(combined_covar_res, name_convertion, by = c("covariate" = "it_name"))
+combined_covar_res$covariate <- combined_covar_res$en_name
+combined_covar_res$en_name <- NULL
 
 num_tests_per_tp <- nrow(combined_covar_res[combined_covar_res$TP == '1',])
 combined_covar_res$bonf_sign <- ifelse(combined_covar_res$pval < 0.05/num_tests_per_tp, T, F)
@@ -243,7 +233,7 @@ combined_covar_res$pval <- as.numeric(combined_covar_res$pval)
 
 combined_covar_res <- combined_covar_res[order(combined_covar_res$pval),]
 
-write.table(combined_covar_res, file = paste0(out_basedir, 'correlations_with_covariates/PC_vs_covariates_visit_0.txt'), quote = F, sep = "\t", row.names = FALSE)
+write.table(combined_covar_res, file = paste0(out_basedir, 'correlations_with_covariates/all_prots_PC_vs_covariates_visit_0.txt'), quote = F, sep = "\t", row.names = FALSE)
 
 col_order <- unique(combined_covar_res$covariate)
 row_order <- paste("PC", seq(1,10), sep = "")
@@ -280,7 +270,7 @@ for (tp in 1:4){
     show_heatmap_legend = if(tp == 1) TRUE else FALSE  
   )
 }
-pdf(paste0(out_basedir, 'correlations_with_covariates/plots/corrplots_PC_vs_covariates.pdf'), width = 20, height  = 5)
+pdf(paste0(out_basedir, 'correlations_with_covariates/plots/all_prots_corrplots_PC_vs_covariates.pdf'), width = 20, height  = 5)
 draw(plot_list[[1]] + plot_list[[2]] + plot_list[[3]] + plot_list[[4]], gap = unit(1, "cm"))
 dev.off()
 

@@ -1,5 +1,5 @@
 library(readxl)
-data <- read_excel("/Users/Dasha/work/Sardinia/W4H/olink/batch12/results12/intensity_shared_prots_261125/replication_BH_pval.xlsx", sheet = 1,  skip = 1)
+data <- read_excel("/Users/Dasha/work/Sardinia/W4H/olink/batch12/results12/intensity_all_prots_220526//replication_BH_pval.xlsx", sheet = 1,  skip = 1)
 data <- data[!is.na(data$p.adj_PROG),]
 data$estimate_Dordevic <- NULL
 data$p.adj_Dordevic <- NULL
@@ -37,6 +37,12 @@ for(i in c(4, 5,6)) {
 
 table(subs$replicated_pval)
 table(subs$replicated_pval_and_direction)
+repl_prots <- subs[subs$replicated_pval_and_direction == T, ]$protein_id
+
+data$replicated_progesterone <- NA
+data[data$p.adj_PROG >= 0.05,]$replicated_progesterone <- "not_signif_in_W4H"
+data[data$p.adj_PROG < 0.05 & data$protein_id %in% repl_prots,]$replicated_progesterone <- "TRUE"
+data[data$p.adj_PROG < 0.05 & ! data$protein_id %in% repl_prots,]$replicated_progesterone <- "FALSE"
 
 
 # Estrogen
@@ -65,3 +71,12 @@ subs$replicated_pval_and_direction <- subs$replicated_pval_and_direction | condi
 
 table(subs$replicated_pval)
 table(subs$replicated_pval_and_direction)
+repl_prots <- subs[subs$replicated_pval_and_direction == T, ]$protein_id
+
+data$replicated_estrogen <- NA
+data[data$p.adj_17BES >= 0.05,]$replicated_estrogen <- "not_signif_in_W4H"
+data[data$p.adj_17BES < 0.05 & data$protein_id %in% repl_prots,]$replicated_estrogen <- "TRUE"
+data[data$p.adj_17BES < 0.05 & ! data$protein_id %in% repl_prots,]$replicated_estrogen <- "FALSE"
+
+write.table(data, file = paste0(out_basedir, "replication_BH.txt"), quote = F, sep = "\t", row.names = FALSE)
+
