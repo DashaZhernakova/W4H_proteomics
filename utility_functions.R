@@ -28,7 +28,7 @@ library(limma)
 #' @param anova_pval Logical. Whether to compute ANOVA p-values instead of normal GAM reported. Default is FALSE.
 #' @param n_points Numeric. Number of time points to use for predictions. Default is 20.
 #' 
-gam_prot_tp_adj_covar <- function(d_wide, prot, covariates, scale = F, rm_outliers = F, predict = T, anova_pval = F, n_points = 20){
+gam_prot_tp_adj_covar <- function(d_wide, prot, covariates, scale = T, rm_outliers = F, predict = T, n_points = 20, use_cyclic_spline = F){
   # if d_wide has phases instead of visits convert phase letter into phase number
   phases = F
   if(! "TP" %in% colnames(d_wide) & "phase" %in% colnames(d_wide)){
@@ -69,20 +69,17 @@ gam_prot_tp_adj_covar <- function(d_wide, prot, covariates, scale = F, rm_outlie
     )
   ]
   
-  # make GAM formula
-  fo_gam <- as.formula(paste("prot ~ s(TP, k = 4) + s(ID,  bs = 're') + ", paste(covariate_names, collapse = "+")))
-  fo_gam_null <- as.formula(paste("prot ~ s(ID,  bs = 're') + ", paste(covariate_names, collapse = "+")))
+  # make GAM formula and run 
   
-  # Run the model
-  model <- gam(fo_gam, data = d_subs,  method = 'REML')
-  
-  if (anova_pval){
-    model0 <- gam(fo_gam_null, data = d_subs, method = 'REML')
-    an <- anova.gam(model, model0)
-    pval <- an$`Pr(>F)`[2]
+  if (! use_cyclic_spline){
+    fo_gam <- as.formula(paste("prot ~ s(TP, k = 4) + s(ID,  bs = 're') + ", paste(covariate_names, collapse = "+")))
+    model <- gam(fo_gam, data = d_subs,  method = 'REML')
   } else {
-    pval <- summary(model)$s.table["s(TP)","p-value"]
+    fo_gam <- as.formula(paste("prot ~ s(TP, bs = 'cc', k = 4) +  s(ID,  bs = 're') + ", paste(covariate_names, collapse = "+")))
+    model <- gam(fo_gam, data = d_subs,  method = 'REML', knots = list(TP = c(0.5, 4.5)))
   }
+  
+  pval <- summary(model)$s.table["s(TP)","p-value"]
   edf <- summary(model)$s.table["s(TP)","edf"]
   fval <- summary(model)$s.table["s(TP)","F"]
   
@@ -111,7 +108,6 @@ gam_prot_tp_adj_covar <- function(d_wide, prot, covariates, scale = F, rm_outlie
     new_data$upper <- new_data$predicted + 1.96 * new_data$SE
     
     new_data2 <- unique(new_data[,c("TP", "predicted", "lower", "upper")])
-    
     
     return(list(pval = pval,  edf = edf, fval = fval, n = nrow(d_subs), n_samples = length(unique(d_subs$ID)), predicted = new_data2$predicted, lower = new_data2$lower, upper = new_data2$upper))
   } 

@@ -29,22 +29,23 @@ d_wide <- d_wide %>%
   ) %>% 
   select(SampleID, ID, phase, everything())
 
-covariates <- read.delim("results/covariates_olink_all_batches.phase_avg.txt", sep = "\t", check.names = F, as.is = T)
+all_covariates <- read.delim("results/covariates_olink_all_batches.phase_avg.txt", sep = "\t", check.names = F, as.is = T)
 
-covariates <- covariates %>% 
+all_covariates <- all_covariates %>% 
   mutate( ID = sub("_.*", "", SampleID), 
           phase = relevel( factor(sub(".*_", "", SampleID), levels = c("F", "O", "EL", "LL")), ref = "F" )
   ) %>% 
   select(SampleID, ID, phase, everything())
 
-covariates[] <- lapply(covariates, function(col) { if (length(unique(col)) < 4) factor(col) else col })
+all_covariates[] <- lapply(all_covariates, function(col) { if (length(unique(col)) < 4) factor(col) else col })
 
-covariates$from <- relevel(as.factor(covariates$from), ref = "Trieste")
-covariates$batch <- relevel(as.factor(covariates$batch), ref = "batch2")
-covariates$season <- relevel(as.factor(covariates$season), ref = "Winter")
+all_covariates$from <- relevel(as.factor(all_covariates$from), ref = "Trieste")
+all_covariates$batch <- relevel(as.factor(all_covariates$batch), ref = "batch2")
+all_covariates$season <- relevel(as.factor(all_covariates$season), ref = "Winter")
 
 #covariate_names <- c("Age","BMI","batch", "from", "storage_months", "median_NPX", "season")
 covariate_names <- c("Age","BMI","from")
+covariates <- all_covariates[,c("SampleID", "ID", "phase", covariate_names)]
 
 all_phases <- c("F", "O", "EL", "LL")
 all_prots <- colnames(d_wide)[! colnames(d_wide) %in% c("SampleID", "ID", "TP","phase")]
@@ -443,12 +444,11 @@ cnt <- 1
 for (prot in all_prots){
   res_gam <- gam_prot_tp_adj_covar(d_wide, prot, covariates, scale = T, predict = F)
   res_lmm <- lmm_prot_tp_poly3_adj_covar(d_wide, prot, covariates, scale = T, report_singular = T)
-  gam_res_list[[i]] <- data.frame(prot = prot, gam_pval = res_gam$pval, gam_edf = res_gam$edf,gam_fval = res_gam$fval,n = res_gam$n, n_samples = res_gam$n_samples, lmm_pval = res_lmm$pval, lmm_singular = res_lmm$singular)
+  gam_res_list[[cnt]] <- data.frame(prot = prot, gam_pval = res_gam$pval, gam_edf = res_gam$edf,gam_fval = res_gam$fval,n = res_gam$n, n_samples = res_gam$n_samples, lmm_pval = res_lmm$pval, lmm_singular = res_lmm$singular)
   cnt <- cnt + 1
   setTxtProgressBar(pb, cnt)
 }
 close(pb)
-write.table(gam_res_prot_tp, file = paste0(out_basedir, "/prot_vs_tp_gam.txt"), quote = F, sep = "\t", row.names = F)
 
 gam_res_prot_tp <- bind_rows(gam_res_list) %>%
   mutate(BH_pval = p.adjust(gam_pval, method = 'BH')) %>%
@@ -630,13 +630,10 @@ gam_res <- gam_res %>%
 cat("Number of BH significant associations:\n")
 cat(nrow(gam_res[gam_res$BH_pval < 0.05,]), "\n")
 
-write.table(gam_res, file = paste0(out_basedir, "prot_vs_allpheno_spline_gam.shared_prots.txt"), quote = F, sep = "\t", row.names = FALSE)
+write.table(gam_res, file = paste0(out_basedir, "prot_vs_allpheno.all_batches.all_prots.txt"), quote = F, sep = "\t", row.names = FALSE)
 
-b1_res <- read.delim("results12/intensity_shared_prots_261125/prot_vs_allpheno_spline_gam.shared_prots.txt", as.is = T, check.names = F, sep = "\t")
-colnames(b1_res) <- c("prot", "pheno", "pval", "estimate", "SE", "n", "n_samples", "lmm_pval")
-b2_res <- read.delim("results12/intensity_batch2_prots_261125/prot_vs_allpheno_spline_gam.batch2_prots.txt", as.is = T, check.names = F, sep = "\t")
-
-gam_res <- rbind(b1_res, b2_res)
+gam_res <- read.delim(paste0(out_basedir, "prot_vs_allpheno_gam.all_batches.all_prots.txt"), as.is = T, check.names = F, sep = "\t")
+lmm_res <- read.delim(paste0(out_basedir, "prot_vs_allpheno_lmm.all_batches.all_prots.txt"), as.is = T, check.names = F, sep = "\t")
 
 gam_res <- gam_res[!gam_res$pheno %in% c("TSH", "FT4", "TST"),]
 
@@ -645,27 +642,41 @@ gam_res <- gam_res %>%
   mutate(across(-c(pheno, prot), as.numeric)) %>% 
   arrange(pval) 
 
-gam_res_hormones <- gam_res[gam_res$pheno %in% all_hormones,] %>%
+gam_res_hormones <- gam_res %>%
+  filter(feature2 %in% all_hormones) %>%
+  rename(pheno = feature2, prot = feature1, estimate = est, SE = se, n_ids = n_samples) %>%
+  na.omit(gam_res) %>%
+  mutate(across(-c(pheno, prot), as.numeric)) %>% 
+  arrange(pval) %>%
   mutate(BH_pval = p.adjust(pval, method = 'BH')) %>%
-  mutate(BH_lmm_pval = p.adjust(lmm_pval, method = 'BH')) %>%
-  relocate(BH_pval, .after = pval) %>%
-  relocate(BH_lmm_pval, .after = lmm_pval)
+  relocate(BH_pval, .after = pval) 
 
-gam_res_phenos <- gam_res[gam_res$pheno %in% all_phenos,] %>%
-  mutate(BH_pval = p.adjust(pval, method = 'BH')) %>%
-  mutate(BH_lmm_pval = p.adjust(lmm_pval, method = 'BH')) %>%
-  relocate(BH_pval, .after = pval) %>%
-  relocate(BH_lmm_pval, .after = lmm_pval)
+gam_res_phenos <- gam_res %>%
+  filter(feature2 %in% all_phenos) %>%
+  rename(pheno = feature2, prot = feature1, estimate = est, SE = se, n_ids = n_samples) %>%
+  na.omit(gam_res) %>%
+  mutate(across(-c(pheno, prot), as.numeric)) %>% 
+  arrange(pval) %>% 
+mutate(BH_pval = p.adjust(pval, method = 'BH')) %>%
+  relocate(BH_pval, .after = pval) 
 
 nrow(gam_res_hormones[gam_res_hormones$BH_pval < 0.05,])
 nrow(gam_res_phenos[gam_res_phenos$BH_pval < 0.05,])
 
-gam_res_hormones$pheno <- gsub("PROG", "P4", gam_res_hormones$pheno)
-gam_res_hormones$pheno <- gsub("17BES", "E2", gam_res_hormones$pheno)
-
 write.table(gam_res_hormones, file = paste0(out_basedir, "prot_vs_hormones.gam.spline.all_prots.txt"), quote = F, sep = "\t", row.names = FALSE)
 write.table(gam_res_phenos, file = paste0(out_basedir, "prot_vs_phenotypes.gam.spline.all_prots.txt"), quote = F, sep = "\t", row.names = FALSE)
 
+b12_res_horm <- read.delim("../batch12/results12/intensity_all_prots_220526/prot_vs_hormones.gam.spline.all_prots.txt", as.is = T, check.names = F, sep = "\t")
+b12_res_pheno <- read.delim("../batch12/results12/intensity_all_prots_220526/prot_vs_phenotypes.gam.spline.all_prots.txt", as.is = T, check.names = F, sep = "\t")
+
+cmp_horm <- full_join(gam_res_hormones, b12_res_horm, suffix = c(".b123", ".b12"), by = c("prot", "pheno"))
+ggplot(cmp_horm, aes(x = estimate.b12, y = estimate.b123)) + 
+  geom_point(alpha = 0.3) + 
+  geom_abline(slope = 1, color = 'grey', lty = 2)
+
+ggplot(cmp_horm, aes(x = -log10(pval.b12), y = -log10(pval.b123))) + 
+  geom_point(alpha = 0.3) + 
+  geom_abline(slope = 1, color = 'grey', lty = 2)
 
 ### Heatmaps
 gam_res_hormones <- read.delim(paste0(out_basedir, "prot_vs_hormones.gam.spline.all_prots.txt"), sep = "\t", as.is = T, check.names = F)
